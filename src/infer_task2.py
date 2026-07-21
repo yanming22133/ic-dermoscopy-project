@@ -72,9 +72,9 @@ def infer(args):
 
         # ROI = Task1 预测病灶 mask / ROI = Task1 predicted lesion mask
         roi = load_pred_lesion_mask(iid, args.task1_mask_dir)
-        if roi is None:
-            roi = np.ones((H, W), dtype=bool)  # 没有就退化为全图 / fallback to full image
-        else:
+        if roi is None or not roi.any():
+            roi = np.ones((H, W), dtype=bool)  # 没有/空 mask 退化为全图，避免 presence 全 absent
+        else:                                  # missing/empty mask -> full image, avoid all-absent
             roi = roi.astype(bool)
 
         # 存 5 个属性 mask / save 5 attribute masks
