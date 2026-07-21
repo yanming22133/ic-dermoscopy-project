@@ -77,9 +77,17 @@ Inference + eval:
 
 Naming trap: mask filenames use `milia_like_cyst` (singular), JSON uses `milia_like_cysts` (plural).
 
-## TODO (not yet written)
+## Code status
 
-- `src/train_task2.py` (6-class seg), `src/infer_task2.py`
-- `src/report_task3.py` (rule template + consistency check)
-- `src/bonus_clip.py` (CLIP/DINOv2 retrieval + RAG)
-- `run_inference.py` (one-click end-to-end, for 7/30)
+All modules written (bilingual comments), Task1 GPU-verified, Task3 CPU-verified:
+- `src/train_task1.py` / `infer_task1.py` — lesion seg (SegFormer, Dice+IoU+HD95)
+- `src/train_task2.py` / `infer_task2.py` — 5-channel multi-label attribute seg + presence (mean sigmoid over ROI)
+- `src/report_task3.py` — rule-based report + consistency check (tutorial thresholds)
+- `src/bonus_clip.py` — CLIP/DINOv2 retrieval + RAG (build/retrieve/rag subcommands)
+- `run_inference.py` — one-click Task1→Task2→Task3→Bonus (for 7/30)
+
+**Pending (needs AC power, don't train on battery — it blue-screens):**
+- Task1 / Task2 full training on GPU
+- Task2 GPU smoke test
+- Bonus: `python -m src.bonus_clip build --encoder clip` (downloads CLIP weights) + retrieve
+- `run_inference.py` end-to-end rehearsal on val (do this on 7/29)

@@ -12,7 +12,7 @@ from PIL import Image
 import cv2
 import albumentations as A
 
-from .config import IMAGE_DIR, TASK1_GT_DIR, SEED, IMG_SIZE
+from .config import IMAGE_DIR, TASK1_GT_DIR, TASK2_GT_DIR, ATTRS_FILE, SEED, IMG_SIZE
 from .preprocessing import preprocess
 
 IMAGENET_MEAN = np.array((0.485, 0.456, 0.406), dtype=np.float32)
@@ -84,4 +84,43 @@ class Task1Dataset(torch.utils.data.Dataset):
         img = (img.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
         img = torch.from_numpy(img.transpose(2, 0, 1)).float()
         mask = torch.from_numpy(mask.astype(np.int64))
+        return img, mask, self.ids[i]
+
+
+# ========== Task2: 5 通道多标签属性分割 / Task2: 5-channel multi-label attribute seg ==========
+def load_task2_masks(image_id, gt_dir=TASK2_GT_DIR):
+    """读 5 张属性 mask，返回 [H,W,5] 的 0/1 数组（多标签，允许重叠）。
+    Read 5 attribute masks, return [H,W,5] 0/1 array (multi-label, overlap allowed)."""
+    masks = []
+    for attr in ATTRS_FILE:  # 文件名用单数 milia_like_cyst / filenames use singular
+        p = os.path.join(gt_dir, f'{image_id}_attribute_{attr}.png')
+        m = np.array(Image.open(p).convert('L')) > 127
+        masks.append(m.astype(np.uint8))
+    return np.stack(masks, axis=-1)  # [H,W,5]
+
+
+class Task2Dataset(torch.utils.data.Dataset):
+    """Task2 多标签分割数据集。返回 (img, mask[B,5,H,W], id)。
+    Task2 multi-label segmentation dataset. Returns (img, mask[B,5,H,W], id)."""
+    def __init__(self, ids, train=True, size=IMG_SIZE, do_preprocess=True):
+        self.ids = ids
+        self.train = train
+        self.tfm = get_transforms(train, size)
+        self.do_preprocess = do_preprocess
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, i):
+        img = load_image(self.ids[i])
+        masks = load_task2_masks(self.ids[i])  # [H,W,5]
+        if self.do_preprocess:
+            img = preprocess(img)
+        # albumentations 用 masks= 传多张 mask，同步变换 / pass multiple masks via masks=, transformed in sync
+        r = self.tfm(image=img, masks=[masks[..., k] for k in range(masks.shape[-1])])
+        img = r['image']
+        masks = np.stack(r['masks'], axis=0)  # [5,H,W]
+        img = (img.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+        img = torch.from_numpy(img.transpose(2, 0, 1)).float()
+        mask = torch.from_numpy(masks.astype(np.float32))  # [5,H,W] 0/1
         return img, mask, self.ids[i]

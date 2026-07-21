@@ -77,9 +77,17 @@ PY = f:\anacondaenvs\pytorch\python.exe   # torch 2.11.0+cu128, CUDA, RTX 4070 8
 
 命名陷阱：mask 文件名用 `milia_like_cyst`（单数），JSON 用 `milia_like_cysts`（复数）。
 
-## 待写（还没写）
+## 代码状态
 
-- `src/train_task2.py`（6 类分割）、`src/infer_task2.py`
-- `src/report_task3.py`（规则报告 + 一致性校验）
-- `src/bonus_clip.py`（CLIP/DINOv2 检索 + RAG）
-- `run_inference.py`（7/30 一键端到端）
+所有模块已写好（双语注释），Task1 已 GPU 验证、Task3 已 CPU 验证：
+- `src/train_task1.py` / `infer_task1.py` — 病灶分割（SegFormer，Dice+IoU+HD95）
+- `src/train_task2.py` / `infer_task2.py` — 5 通道多标签属性分割 + presence（ROI 上 mean sigmoid）
+- `src/report_task3.py` — 规则报告 + 一致性校验（教程阈值）
+- `src/bonus_clip.py` — CLIP/DINOv2 检索 + RAG（build/retrieve/rag 子命令）
+- `run_inference.py` — 一键 Task1→Task2→Task3→Bonus（7/30 用）
+
+**待跑（需插电，别用电池训练——会蓝屏）：**
+- Task1 / Task2 全量 GPU 训练
+- Task2 GPU 冒烟测试
+- Bonus：`python -m src.bonus_clip build --encoder clip`（会下 CLIP 权重）+ retrieve
+- `run_inference.py` 在 val 上端到端演练（7/29 做）

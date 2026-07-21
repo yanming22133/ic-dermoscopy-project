@@ -32,6 +32,13 @@ _grouping.txt
 _docx.txt
 *.log
 
+# ===== Office 锁文件 / Office lock files =====
+~$*
+
+# ===== "副本" 复制文件 / "copy" duplicate files =====
+*- 副本.*
+*副本*
+
 # ===== OS / IDE =====
 .vscode/
 .idea/
