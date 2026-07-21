@@ -13,6 +13,7 @@ os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
 REPOS = {
     'segformer-b0-ade': 'nvidia/segformer-b0-finetuned-ade-512-512',
     'segformer-b2-ade': 'nvidia/segformer-b2-finetuned-ade-512-512',
+    'sam-vit-base': 'facebook/sam-vit-base',  # Tier1: SAM 边界精修用 / for SAM boundary refinement
 }
 
 if __name__ == '__main__':

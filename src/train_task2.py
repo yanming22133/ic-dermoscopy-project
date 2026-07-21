@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .config import SEED, IMG_SIZE, OUT_DIR, ATTRS_FILE, ATTRS_JSON, STATUS_HI, STATUS_LO
-from .data import get_splits, Task2Dataset, load_task1_mask
+from .data import get_splits, Task2Dataset, load_task1_mask, compute_sample_weights, build_cache
 from .model import build_segformer
 
 # 逐通道权重（稀疏类加重）/ per-channel weights (sparse classes up-weighted)
@@ -35,17 +35,27 @@ def set_seed(s):
     random.seed(s); np.random.seed(s); torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 
 
+def focal_loss(logits, target, gamma=2.0, alpha=0.25):
+    """Tier1: Focal Loss，降易分样本权重，提稀疏类 recall。
+    Tier1: Focal Loss, down-weights easy samples, boosts sparse-class recall.
+    返回逐通道损失 [5]。/ Returns per-channel loss [5]."""
+    bce = F.binary_cross_entropy_with_logits(logits, target, reduction='none')
+    p = torch.sigmoid(logits)
+    pt = p * target + (1 - p) * (1 - target)
+    return (alpha * (1 - pt) ** gamma * bce).mean(dim=(0, 2, 3))  # [5]
+
+
 def multilabel_loss(logits, target, weights):
-    """logits/target: [B,5,H,W]。逐通道 BCE+Dice 加权和。
-    logits/target: [B,5,H,W]. Weighted sum of per-channel BCE+Dice."""
+    """logits/target: [B,5,H,W]。逐通道 Focal+Dice 加权和。
+    logits/target: [B,5,H,W]. Weighted sum of per-channel Focal+Dice."""
     prob = torch.sigmoid(logits)
-    bce = F.binary_cross_entropy_with_logits(logits, target, reduction='none').mean(dim=(0, 2, 3))  # [5]
+    foc = focal_loss(logits, target)  # [5]  Tier1: Focal 替代 BCE / Focal replaces BCE
     # 逐通道 Dice / per-channel Dice
     inter = (prob * target).sum(dim=(0, 2, 3))
     denom = prob.sum(dim=(0, 2, 3)) + target.sum(dim=(0, 2, 3)) + 1e-6
     dice = 1 - (2 * inter / denom)  # [5]
     w = weights.to(logits.device)
-    return (w * (bce + dice)).mean()
+    return (w * (foc + dice)).mean()
 
 
 @torch.no_grad()
@@ -96,6 +106,10 @@ def main():
     ap.add_argument('--max_train', type=int, default=0)
     ap.add_argument('--max_val', type=int, default=0)
     ap.add_argument('--num_workers', type=int, default=0)
+    ap.add_argument('--balanced', type=int, default=1, help='Tier1: 稀疏类平衡采样 1/0 / sparse-class balanced sampling')
+    ap.add_argument('--patience', type=int, default=10, help='早停耐心；0=不早停 / early stop patience; 0=off')
+    ap.add_argument('--accum_steps', type=int, default=1, help='梯度累积；实际batch×accum=等效batch / grad accum')
+    ap.add_argument('--resume', action='store_true', help='从 last.pth 断点续训 / resume from last.pth')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -108,8 +122,19 @@ def main():
     if args.max_val > 0: va = va[:args.max_val]
     print(f'split: train {len(tr)} / val {len(va)} / test-local {len(te)}', flush=True)
 
-    tr_dl = DataLoader(Task2Dataset(tr, True, args.size), batch_size=args.batch,
-                       shuffle=True, num_workers=args.num_workers, pin_memory=True)
+    build_cache(tr + va)  # 一次性预处理缓存 / one-time preprocess cache
+
+    # Tier1: 平衡采样（含稀有属性的样本权重高）/ balanced sampling (rare-attr samples up-weighted)
+    from torch.utils.data import WeightedRandomSampler
+    if args.balanced and args.max_train == 0:
+        sw = compute_sample_weights(tr)
+        sampler = WeightedRandomSampler(sw, num_samples=len(tr), replacement=True)
+        tr_dl = DataLoader(Task2Dataset(tr, True, args.size), batch_size=args.batch,
+                           sampler=sampler, num_workers=args.num_workers, pin_memory=True)
+        print(f'balanced sampling on (rare-attr weight=3x)', flush=True)
+    else:
+        tr_dl = DataLoader(Task2Dataset(tr, True, args.size), batch_size=args.batch,
+                           shuffle=True, num_workers=args.num_workers, pin_memory=True)
     va_dl = DataLoader(Task2Dataset(va, False, args.size), batch_size=args.batch,
                        shuffle=False, num_workers=args.num_workers)
 
@@ -118,17 +143,33 @@ def main():
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
 
     best = -1.0
+    no_improve = 0
+    start_ep = 0
     best_path = os.path.join(args.out, 'best.pth')
-    for ep in range(args.epochs):
+    last_path = os.path.join(args.out, 'last.pth')
+    accum = max(1, args.accum_steps)
+    if args.resume and os.path.exists(last_path):  # 断点续训 / resume
+        ck = torch.load(last_path, map_location=device, weights_only=False)
+        model.load_state_dict(ck['model'])
+        opt.load_state_dict(ck['opt'])
+        start_ep = ck.get('epoch', 0)
+        best = ck.get('best', -1.0)
+        no_improve = ck.get('no_improve', 0)
+        print(f'resumed from epoch {start_ep}, best={best:.4f}', flush=True)
+
+    for ep in range(start_ep, args.epochs):
         model.train(); tot = 0.0
-        for img, mask, _ in tr_dl:
+        opt.zero_grad()
+        for i, (img, mask, _) in enumerate(tr_dl):
             img = img.to(device); mask = mask.to(device)
             with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
                 out = model(pixel_values=img).logits
                 out = F.interpolate(out, size=mask.shape[-2:], mode='bilinear', align_corners=False)
-                loss = multilabel_loss(out, mask, CHAN_WEIGHTS)
-            opt.zero_grad(); scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
-            tot += loss.item()
+                loss = multilabel_loss(out, mask, CHAN_WEIGHTS) / accum  # 梯度累积 / grad accum
+            scaler.scale(loss).backward()
+            if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
+                scaler.step(opt); scaler.update(); opt.zero_grad()
+            tot += loss.item() * accum
         d, i, a = evaluate(model, va_dl, device)
         mean_dice = float(np.nanmean(d))
         print(f'ep {ep+1}/{args.epochs} loss={tot/len(tr_dl):.4f} meanDice={mean_dice:.4f}', flush=True)
@@ -136,11 +177,28 @@ def main():
         print('  per-attr presenceAcc: ' + ' '.join(f'{ATTRS_FILE[k]}={a[k]:.3f}' for k in range(len(ATTRS_FILE))), flush=True)
         if mean_dice > best:
             best = mean_dice
+            no_improve = 0
             torch.save({'model': model.state_dict(), 'variant': args.variant, 'size': args.size,
                         'mean_dice': mean_dice, 'epoch': ep + 1}, best_path)
             json.dump({'mean_dice': mean_dice, 'dice': d, 'iou': i, 'presence_acc': a, 'epoch': ep + 1},
                       open(os.path.join(args.out, 'best_metrics.json'), 'w'), indent=2)
+        else:
+            no_improve += 1
+        torch.save({'model': model.state_dict(), 'opt': opt.state_dict(), 'epoch': ep + 1,
+                    'best': best, 'no_improve': no_improve}, last_path)  # 崩了能续 / crash recovery
+        if args.patience > 0 and no_improve >= args.patience:
+            print(f'early stopping at ep {ep+1} (no improve {no_improve} epochs)', flush=True)
+            break
     print(f'best val meanDice={best:.4f} -> {best_path}', flush=True)
+
+    # 最终在 val 上带 presence 评估最佳 checkpoint / final eval on best ckpt
+    print('--- final eval on best checkpoint ---', flush=True)
+    ck = torch.load(best_path, map_location=device, weights_only=False)
+    model.load_state_dict(ck['model'])
+    d, i, a = evaluate(model, va_dl, device)
+    print('  per-attr Dice: ' + ' '.join(f'{ATTRS_FILE[k]}={d[k]:.3f}' for k in range(len(ATTRS_FILE))), flush=True)
+    print('  per-attr presenceAcc: ' + ' '.join(f'{ATTRS_FILE[k]}={a[k]:.3f}' for k in range(len(ATTRS_FILE))), flush=True)
+    json.dump({'dice': d, 'iou': i, 'presence_acc': a}, open(os.path.join(args.out, 'final_val_metrics.json'), 'w'), indent=2)
 
 
 if __name__ == '__main__':

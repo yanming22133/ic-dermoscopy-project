@@ -32,6 +32,8 @@ def main():
     ap.add_argument('--k', type=int, default=3)
     ap.add_argument('--model_version', default='task1_best.pth, task2_best.pth')
     ap.add_argument('--do_preprocess', type=int, default=1)
+    ap.add_argument('--tta', type=int, default=1, help='Tier1: 翻转 TTA 1/0 / flip TTA')
+    ap.add_argument('--sam_refine', type=int, default=0, help='Tier1: SAM 边界精修 1/0 / SAM refine')
     ap.add_argument('--skip_bonus', action='store_true')
     args = ap.parse_args()
 
@@ -44,12 +46,14 @@ def main():
     print('===== [1/4] Task1 病灶分割 / lesion segmentation =====', flush=True)
     infer_task1.infer(SimpleNamespace(
         ckpt=args.task1_ckpt, split='test', image_dir=args.test_dir,
-        save_dir=t1_dir, do_preprocess=args.do_preprocess))
+        save_dir=t1_dir, do_preprocess=args.do_preprocess,
+        tta=args.tta, sam_refine=args.sam_refine))
 
     print('===== [2/4] Task2 属性检测 / attribute detection =====', flush=True)
     infer_task2.infer(SimpleNamespace(
         ckpt=args.task2_ckpt, task1_mask_dir=t1_dir, split='test',
-        image_dir=args.test_dir, save_dir=t2_dir, do_preprocess=args.do_preprocess))
+        image_dir=args.test_dir, save_dir=t2_dir, do_preprocess=args.do_preprocess,
+        tta=args.tta))
 
     print('===== [3/4] Task3 锚定报告 / anchored report =====', flush=True)
     report_task3.run(SimpleNamespace(

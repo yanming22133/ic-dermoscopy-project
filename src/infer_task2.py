@@ -40,6 +40,28 @@ def load_pred_lesion_mask(iid, task1_mask_dir):
 
 
 @torch.no_grad()
+def predict_prob_multi(model, x, H, W, tta=False):
+    """返回 5 通道属性概率 [5,H,W]。TTA 时 4 翻转平均。
+    Returns 5-channel attribute prob [5,H,W]. TTA averages 4 flips."""
+    def fwd(xx):
+        o = model(pixel_values=xx).logits
+        o = F.interpolate(o, size=(H, W), mode='bilinear', align_corners=False)
+        return torch.sigmoid(o)  # [1,5,H,W]
+    if not tta:
+        return fwd(x)[0].cpu().numpy()
+    probs = []
+    for h in (False, True):
+        for v in (False, True):
+            xx = torch.flip(x, [3]) if h else x
+            xx = torch.flip(xx, [2]) if v else xx
+            p = fwd(xx)
+            if h: p = torch.flip(p, [3])
+            if v: p = torch.flip(p, [2])
+            probs.append(p)
+    return torch.stack(probs).mean(0)[0].cpu().numpy()
+
+
+@torch.no_grad()
 def infer(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     ck = torch.load(args.ckpt, map_location=device, weights_only=False)
@@ -66,9 +88,7 @@ def infer(args):
         x = r['image']
         x = (x.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
         x = torch.from_numpy(x.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
-        out = model(pixel_values=x).logits
-        out = F.interpolate(out, size=(H, W), mode='bilinear', align_corners=False)
-        prob = torch.sigmoid(out[0]).cpu().numpy()  # [5,H,W]
+        prob = predict_prob_multi(model, x, H, W, tta=bool(args.tta))  # Tier1: TTA
 
         # ROI = Task1 预测病灶 mask / ROI = Task1 predicted lesion mask
         roi = load_pred_lesion_mask(iid, args.task1_mask_dir)
@@ -102,6 +122,7 @@ def main():
     ap.add_argument('--image_dir', default=None)
     ap.add_argument('--save_dir', required=True)
     ap.add_argument('--do_preprocess', type=int, default=1)
+    ap.add_argument('--tta', type=int, default=0, help='Tier1: 翻转 TTA 1/0 / flip TTA')
     args = ap.parse_args()
     infer(args)
 

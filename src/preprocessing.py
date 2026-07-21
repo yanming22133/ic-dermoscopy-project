@@ -8,13 +8,17 @@ import cv2
 import numpy as np
 
 
-def dullrazor(img, kernel_size=21, thresh=10):
+def dullrazor(img, kernel_size=15, thresh=15, max_area_frac=0.10):
     """DullRazor：用 blackhat 找毛发，inpaint 抹掉。
-    DullRazor: find hair with blackhat, remove it via inpainting."""
+    DullRazor: find hair with blackhat, remove it via inpainting.
+    小核+高阈值+大面积跳过，保证速度（inpaint 是瓶颈）。
+    Small kernel + higher thresh + skip-large-area for speed (inpaint is the bottleneck)."""
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
     blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
     _, hair_mask = cv2.threshold(blackhat, thresh, 255, cv2.THRESH_BINARY)
+    if hair_mask.sum() / hair_mask.size > max_area_frac:
+        return img  # 毛发/伪影太多，inpaint 会很慢，跳过 / too much, skip slow inpaint
     return cv2.inpaint(img, hair_mask, 1, cv2.INPAINT_TELEA)
 
 

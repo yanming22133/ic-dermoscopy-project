@@ -23,6 +23,28 @@ from .data import get_splits, load_image, get_transforms, IMAGENET_MEAN, IMAGENE
 from .preprocessing import preprocess
 from .model import build_segformer
 from .metrics import dice_score, iou_score, hausdorff95
+from . import sam_refine
+
+
+@torch.no_grad()
+def predict_prob(model, x, H, W, tta=False):
+    """返回病灶概率 [H,W]。TTA 时 4 个翻转方向平均。/ Returns lesion prob [H,W]. TTA averages 4 flips."""
+    def fwd(xx):
+        o = model(pixel_values=xx).logits
+        o = F.interpolate(o, size=(H, W), mode='bilinear', align_corners=False)
+        return F.softmax(o, dim=1)[:, 1:2]  # [1,1,H,W]
+    if not tta:
+        return fwd(x)[0, 0].cpu().numpy()
+    probs = []
+    for h in (False, True):
+        for v in (False, True):
+            xx = torch.flip(x, [3]) if h else x
+            xx = torch.flip(xx, [2]) if v else xx
+            p = fwd(xx)
+            if h: p = torch.flip(p, [3])
+            if v: p = torch.flip(p, [2])
+            probs.append(p)
+    return torch.stack(probs).mean(0)[0, 0].cpu().numpy()
 
 
 @torch.no_grad()
@@ -34,6 +56,11 @@ def infer(args):
     model = build_segformer(variant).to(device)
     model.load_state_dict(ck['model'])
     model.eval()
+
+    sam_model, sam_proc = (None, None)
+    if args.sam_refine:  # Tier1: SAM 边界精修 / SAM boundary refinement
+        print('loading SAM for boundary refinement...', flush=True)
+        sam_model, sam_proc = sam_refine.load_sam(device)
 
     # 决定要跑哪些图 / decide which images to run
     if args.image_dir:
@@ -59,10 +86,11 @@ def infer(args):
         x = r['image']
         x = (x.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
         x = torch.from_numpy(x.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
-        out = model(pixel_values=x).logits
-        out = F.interpolate(out, size=(H, W), mode='bilinear', align_corners=False)
-        prob = F.softmax(out, dim=1)[0, 1].cpu().numpy()
-        pred = (prob >= 0.5).astype(np.uint8) * 255  # 0/255，匹配 example / 0/255, matches example
+        prob = predict_prob(model, x, H, W, tta=bool(args.tta))  # Tier1: TTA
+        pred01 = (prob >= 0.5).astype(np.uint8)
+        if sam_model is not None:  # Tier1: SAM 精修边界 / SAM refine boundary
+            pred01 = sam_refine.refine_mask(sam_model, sam_proc, img_p, pred01, device)
+        pred = pred01 * 255  # 0/255，匹配 example / 0/255, matches example
 
         if save_dir:
             Image.fromarray(pred, mode='L').save(os.path.join(save_dir, iid + '.jpg'))
@@ -91,6 +119,8 @@ def main():
     ap.add_argument('--image_dir', default=None, help='官方测试集图目录；给了就忽略 --split / official test img dir; overrides --split if set')
     ap.add_argument('--save_dir', default=None)
     ap.add_argument('--do_preprocess', type=int, default=1)
+    ap.add_argument('--tta', type=int, default=0, help='Tier1: 翻转 TTA 1/0 / flip TTA')
+    ap.add_argument('--sam_refine', type=int, default=0, help='Tier1: SAM 边界精修 1/0 / SAM boundary refine')
     args = ap.parse_args()
     infer(args)
 

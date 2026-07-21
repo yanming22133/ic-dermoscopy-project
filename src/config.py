@@ -22,9 +22,11 @@ EXAMPLE_DIR = os.path.join(PROJ_DIR, 'example_result')
 PRETRAINED = {
     'b0': os.path.join(PROJ_DIR, 'pretrained', 'segformer-b0-ade'),
     'b2': os.path.join(PROJ_DIR, 'pretrained', 'segformer-b2-ade'),
+    'sam': os.path.join(PROJ_DIR, 'pretrained', 'sam-vit-base'),
 }
 
 OUT_DIR = os.path.join(PROJ_DIR, 'outputs')
+CACHE_DIR = os.path.join(OUT_DIR, 'preprocessed')  # 预处理缓存（DullRazor+ShadesGray 跑一次存盘）/ preprocess cache
 
 SEED = 42
 IMG_SIZE = 512  # SegFormer-B2 训练分辨率；OOM 时降到 384 或换 b0

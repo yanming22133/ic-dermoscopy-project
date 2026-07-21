@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .config import SEED, IMG_SIZE, OUT_DIR
-from .data import get_splits, Task1Dataset
+from .data import get_splits, Task1Dataset, build_cache
 from .model import build_segformer
 from .metrics import dice_score, iou_score, hausdorff95
 
@@ -37,8 +37,21 @@ def dice_loss(prob, target, smooth=1e-6):
     return 1 - ((2 * inter + smooth) / (denom + smooth)).mean()
 
 
+def tversky_loss(prob, target, alpha=0.3, beta=0.7, smooth=1e-6):
+    """Tier1: Tversky 边界损失。beta>alpha 偏重 recall（少漏病灶），降 Hausdorff。
+    Tier1: Tversky boundary loss. beta>alpha emphasizes recall, lowers Hausdorff."""
+    target = target.float()
+    tp = (prob * target).sum(dim=(2, 3))
+    fp = (prob * (1 - target)).sum(dim=(2, 3))
+    fn = ((1 - prob) * target).sum(dim=(2, 3))
+    tversky = (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
+    return 1 - tversky.mean()
+
+
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, compute_hd=True):
+    """评估。compute_hd=False 时跳过慢的 Hausdorff（训练中每轮用，快）。
+    Eval. compute_hd=False skips the slow Hausdorff (used during training, fast)."""
     model.eval()
     dices, ious, hds = [], [], []
     for img, mask, _ in loader:
@@ -52,10 +65,12 @@ def evaluate(model, loader, device):
         for p, g in zip(pred, gt):
             dices.append(dice_score(p, g))
             ious.append(iou_score(p, g))
-            hd = hausdorff95(p, g)
-            if not np.isnan(hd):
-                hds.append(hd)
-    return float(np.mean(dices)), float(np.mean(ious)), (float(np.mean(hds)) if hds else float('nan'))
+            if compute_hd:
+                hd = hausdorff95(p, g)
+                if not np.isnan(hd):
+                    hds.append(hd)
+    hd_mean = float(np.mean(hds)) if hds else float('nan')
+    return float(np.mean(dices)), float(np.mean(ious)), hd_mean
 
 
 def main():
@@ -69,6 +84,9 @@ def main():
     ap.add_argument('--max_train', type=int, default=0, help='>0 时只取这么多训练图，用于冒烟测试 / if >0, use only this many train images (smoke test)')
     ap.add_argument('--max_val', type=int, default=0, help='>0 时只评估这么多 val 图，用于冒烟测试 / if >0, evaluate only this many val images (smoke test)')
     ap.add_argument('--num_workers', type=int, default=0)
+    ap.add_argument('--patience', type=int, default=10, help='早停耐心；0=不早停 / early stop patience; 0=off')
+    ap.add_argument('--accum_steps', type=int, default=1, help='梯度累积步数；实际batch×accum=等效batch / grad accum')
+    ap.add_argument('--resume', action='store_true', help='从 last.pth 断点续训 / resume from last.pth')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -83,6 +101,8 @@ def main():
         va = va[:args.max_val]
     print(f'split: train {len(tr)} / val {len(va)} / test-local {len(te)}', flush=True)
 
+    build_cache(tr + va)  # 一次性预处理缓存，后续每轮直接读 / one-time preprocess cache
+
     tr_dl = DataLoader(Task1Dataset(tr, True, args.size), batch_size=args.batch,
                        shuffle=True, num_workers=args.num_workers, pin_memory=True)
     va_dl = DataLoader(Task1Dataset(va, False, args.size), batch_size=args.batch,
@@ -93,11 +113,25 @@ def main():
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
 
     best = -1.0
+    no_improve = 0
+    start_ep = 0
     best_path = os.path.join(args.out, 'best.pth')
-    for ep in range(args.epochs):
+    last_path = os.path.join(args.out, 'last.pth')
+    accum = max(1, args.accum_steps)
+    if args.resume and os.path.exists(last_path):  # 断点续训 / resume
+        ck = torch.load(last_path, map_location=device, weights_only=False)
+        model.load_state_dict(ck['model'])
+        opt.load_state_dict(ck['opt'])
+        start_ep = ck.get('epoch', 0)
+        best = ck.get('best', -1.0)
+        no_improve = ck.get('no_improve', 0)
+        print(f'resumed from epoch {start_ep}, best={best:.4f}', flush=True)
+
+    for ep in range(start_ep, args.epochs):
         model.train()
+        opt.zero_grad()
         tot = 0.0
-        for img, mask, _ in tr_dl:
+        for i, (img, mask, _) in enumerate(tr_dl):
             img = img.to(device)
             mask = mask.to(device)
             with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
@@ -105,21 +139,46 @@ def main():
                 out = F.interpolate(out, size=mask.shape[-2:], mode='bilinear', align_corners=False)
                 ce = F.cross_entropy(out, mask)
                 prob = F.softmax(out, dim=1)[:, 1:2]  # [B,1,H,W]
-                loss = ce + dice_loss(prob, mask.unsqueeze(1).float())
-            opt.zero_grad()
+                m = mask.unsqueeze(1).float()
+                loss = (ce + dice_loss(prob, m) + 0.5 * tversky_loss(prob, m)) / accum  # 梯度累积 / grad accum
             scaler.scale(loss).backward()
-            scaler.step(opt)
-            scaler.update()
-            tot += loss.item()
-        d, i, h = evaluate(model, va_dl, device)
-        print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f} HD95={h:.2f}')
+            if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
+                scaler.step(opt)
+                scaler.update()
+                opt.zero_grad()
+            tot += loss.item() * accum
+        d, i, _ = evaluate(model, va_dl, device, compute_hd=False)  # 训练中不算 HD95（快）
+        print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', flush=True)
         if d > best:
             best = d
+            no_improve = 0
             torch.save({'model': model.state_dict(), 'variant': args.variant, 'size': args.size,
-                        'dice': d, 'iou': i, 'hd95': h, 'epoch': ep + 1}, best_path)
-            json.dump({'dice': d, 'iou': i, 'hd95': h, 'epoch': ep + 1},
+                        'dice': d, 'iou': i, 'epoch': ep + 1}, best_path)
+            json.dump({'dice': d, 'iou': i, 'epoch': ep + 1},
                       open(os.path.join(args.out, 'best_metrics.json'), 'w'), indent=2)
-    print(f'best val Dice={best:.4f} -> {best_path}')
+        else:
+            no_improve += 1
+        # 每轮存 last.pth，崩了能续 / save last.pth every epoch for crash recovery
+        torch.save({'model': model.state_dict(), 'opt': opt.state_dict(), 'epoch': ep + 1,
+                    'best': best, 'no_improve': no_improve}, last_path)
+        if args.patience > 0 and no_improve >= args.patience:
+            print(f'early stopping at ep {ep+1} (no improve {no_improve} epochs)', flush=True)
+            break
+    print(f'best val Dice={best:.4f} -> {best_path}', flush=True)
+
+    # 最终对最佳 checkpoint 在 val + test-local 上算 HD95（训练中省略了）/ final HD95 eval
+    print('--- final eval (with HD95) on best checkpoint ---', flush=True)
+    ck = torch.load(best_path, map_location=device, weights_only=False)
+    model.load_state_dict(ck['model'])
+    te_dl = DataLoader(Task1Dataset(te, False, args.size), batch_size=args.batch,
+                       shuffle=False, num_workers=args.num_workers)
+    for name, dl in [('val', va_dl), ('test-local', te_dl)]:
+        d, i, h = evaluate(model, dl, device, compute_hd=True)
+        print(f'{name}: Dice={d:.4f} IoU={i:.4f} HD95={h:.2f}', flush=True)
+        if name == 'val':
+            json.dump({'dice': d, 'iou': i, 'hd95': h}, open(os.path.join(args.out, 'final_val_metrics.json'), 'w'), indent=2)
+        else:
+            json.dump({'dice': d, 'iou': i, 'hd95': h}, open(os.path.join(args.out, 'final_testlocal_metrics.json'), 'w'), indent=2)
 
 
 if __name__ == '__main__':
