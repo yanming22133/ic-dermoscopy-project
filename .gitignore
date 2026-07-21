@@ -1,0 +1,39 @@
+# ===== 大文件 / 数据 / 权重 — 绝不进 git =====
+# Large files / data / weights — never commit (too big, not repo material)
+summer_school_project_train/
+summer_school_project_train.zip
+pretrained/
+outputs/
+example_result/
+example_result.zip
+
+# ===== 论文 PDF（版权，建议不传；要共享用 GitHub Release 或私有仓）=====
+# Paper PDFs (copyright — share via Release or a private repo instead)
+papers/
+
+# ===== 课程材料（按需保留，默认不传公开仓）=====
+# Course materials (keep if you want, default ignored for a public repo)
+Project_Briefing.pdf
+DSI Summer School Project tutorial CV.pdf
+Grouping list .pdf
+20260721*.docx
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.cache/
+.ipynb_checkpoints/
+
+# ===== 临时文件 =====
+_check.py
+_briefing.txt
+_grouping.txt
+_docx.txt
+*.log
+
+# ===== OS / IDE =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

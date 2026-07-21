@@ -1,0 +1,30 @@
+# IC DSI Summer School 项目依赖
+# 安装方法（必须用 CUDA 版 torch，不要用 PATH 里的 CPU python）：
+#   f:\AnacondaEnvs\pytorch\Scripts\pip install -r requirements.txt
+# torch/torchvision 需从 CUDA 12.8 索引安装（已装好，注释留档）：
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+# --- 深度学习核心（CUDA 12.8 构建）---
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+timm==1.0.22
+transformers==4.57.3
+huggingface_hub==0.36.0
+
+# --- 数据与增强 ---
+albumentations==2.0.8
+opencv-python==4.13.0.92
+numpy==2.2.6
+pillow==12.0.0
+pandas==2.3.3
+scikit-learn==1.7.2
+scipy==1.15.3
+
+# --- 检索 bonus ---
+faiss-cpu==1.14.3
+# OpenAI CLIP（bonus 检索用，已装为 clip==1.0；如需 open_clip 可另装）
+# open_clip_torch==2.26.1
+
+# --- 可视化与工具 ---
+matplotlib==3.10.7
+tqdm==4.67.3
