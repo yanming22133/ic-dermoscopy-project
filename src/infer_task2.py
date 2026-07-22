@@ -88,7 +88,19 @@ def infer(args):
         x = r['image']
         x = (x.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
         x = torch.from_numpy(x.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
-        prob = predict_prob_multi(model, x, H, W, tta=bool(args.tta))  # Tier1: TTA
+        # 多尺度 TTA / multi-scale TTA
+        if args.ms_tta:
+            probs = []
+            for sc in [0.8, 1.0, 1.2]:
+                hs, ws = int(H * sc), int(W * sc)
+                xs = F.interpolate(x, size=(hs, ws), mode='bilinear', align_corners=False)
+                p = predict_prob_multi(model, xs, hs, ws, tta=bool(args.tta))
+                p = torch.from_numpy(p).float().unsqueeze(0)  # [1,5,hs,ws]
+                p = F.interpolate(p, size=(H, W), mode='bilinear', align_corners=False)[0].numpy()  # [5,H,W]
+                probs.append(p)
+            prob = np.stack(probs).mean(0)
+        else:
+            prob = predict_prob_multi(model, x, H, W, tta=bool(args.tta))  # Tier1: TTA
 
         # ROI = Task1 预测病灶 mask / ROI = Task1 predicted lesion mask
         roi = load_pred_lesion_mask(iid, args.task1_mask_dir)
@@ -123,6 +135,7 @@ def main():
     ap.add_argument('--save_dir', required=True)
     ap.add_argument('--do_preprocess', type=int, default=1)
     ap.add_argument('--tta', type=int, default=0, help='Tier1: 翻转 TTA 1/0 / flip TTA')
+    ap.add_argument('--ms_tta', type=int, default=0, help='多尺度 TTA：0.8x/1.0x/1.2x 平均 1/0 / multi-scale TTA')
     args = ap.parse_args()
     infer(args)
 

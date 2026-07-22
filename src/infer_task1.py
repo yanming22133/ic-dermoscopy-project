@@ -116,7 +116,19 @@ def infer(args):
         x = r['image']
         x = (x.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
         x = torch.from_numpy(x.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
-        prob = predict_prob(models, x, H, W, tta=bool(args.tta))  # Tier1: TTA + 集成 / TTA + ensemble
+        # 多尺度 TTA / multi-scale TTA
+        if args.ms_tta:
+            probs = []
+            for sc in [0.8, 1.0, 1.2]:
+                hs, ws = int(H * sc), int(W * sc)
+                xs = F.interpolate(x, size=(hs, ws), mode='bilinear', align_corners=False)
+                p = predict_prob(models, xs, hs, ws, tta=bool(args.tta))
+                p = torch.from_numpy(p).float().unsqueeze(0).unsqueeze(0)  # [1,1,hs,ws]
+                p = F.interpolate(p, size=(H, W), mode='bilinear', align_corners=False)[0, 0].numpy()
+                probs.append(p)
+            prob = np.stack(probs).mean(0)
+        else:
+            prob = predict_prob(models, x, H, W, tta=bool(args.tta))  # Tier1: TTA + 集成 / TTA + ensemble
         pred01 = (prob >= 0.5).astype(np.uint8)
         if sam_model is not None:  # Tier1: SAM 精修边界 / SAM refine boundary
             pred01 = sam_refine.refine_mask(sam_model, sam_proc, img_p, pred01, device)
@@ -155,6 +167,7 @@ def main():
     ap.add_argument('--tta', type=int, default=0, help='Tier1: 翻转 TTA 1/0 / flip TTA')
     ap.add_argument('--sam_refine', type=int, default=0, help='Tier1: SAM 边界精修 1/0 / SAM boundary refine')
     ap.add_argument('--postproc', type=int, default=0, help='后处理：形态学+最大连通域 1/0 / morphology + largest CC')
+    ap.add_argument('--ms_tta', type=int, default=0, help='多尺度 TTA：0.8x/1.0x/1.2x 平均 1/0 / multi-scale TTA')
     args = ap.parse_args()
     if not args.ckpt and not args.ensemble:
         ap.error('必须给 --ckpt 或 --ensemble / must give --ckpt or --ensemble')

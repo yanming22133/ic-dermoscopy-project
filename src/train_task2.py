@@ -110,6 +110,7 @@ def main():
     ap.add_argument('--patience', type=int, default=10, help='早停耐心；0=不早停 / early stop patience; 0=off')
     ap.add_argument('--accum_steps', type=int, default=1, help='梯度累积；实际batch×accum=等效batch / grad accum')
     ap.add_argument('--resume', action='store_true', help='从 last.pth 断点续训 / resume from last.pth')
+    ap.add_argument('--cosine_lr', action='store_true', help='余弦退火学习率 / cosine annealing LR')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -141,6 +142,7 @@ def main():
     model = build_segformer(args.variant, num_labels=5).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.cosine_lr else None
 
     best = -1.0
     no_improve = 0
@@ -173,6 +175,8 @@ def main():
         d, i, a = evaluate(model, va_dl, device)
         mean_dice = float(np.nanmean(d))
         print(f'ep {ep+1}/{args.epochs} loss={tot/len(tr_dl):.4f} meanDice={mean_dice:.4f}', flush=True)
+        if sched is not None:
+            sched.step()  # 余弦退火 / cosine annealing
         print('  per-attr Dice: ' + ' '.join(f'{ATTRS_FILE[k]}={d[k]:.3f}' for k in range(len(ATTRS_FILE))), flush=True)
         print('  per-attr presenceAcc: ' + ' '.join(f'{ATTRS_FILE[k]}={a[k]:.3f}' for k in range(len(ATTRS_FILE))), flush=True)
         if mean_dice > best:
