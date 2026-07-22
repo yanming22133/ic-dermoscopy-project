@@ -23,7 +23,7 @@ from PIL import Image
 
 from .config import (IMAGE_DIR, TASK1_GT_DIR, OUT_DIR, ATTRS_FILE, ATTRS_JSON,
                      STATUS_HI, STATUS_LO)
-from .data import get_splits, load_image, get_transforms, IMAGENET_MEAN, IMAGENET_STD, list_image_ids
+from .data import get_splits, load_image, load_image_pp, get_transforms, IMAGENET_MEAN, IMAGENET_STD, list_image_ids
 from .preprocessing import preprocess
 from .model import build_segformer
 
@@ -83,7 +83,7 @@ def infer(args):
     for iid in ids:
         img = load_image(iid, args.image_dir or IMAGE_DIR)
         H, W = img.shape[:2]
-        img_p = preprocess(img) if args.do_preprocess else img
+        img_p = load_image_pp(iid, args.image_dir or IMAGE_DIR) if args.do_preprocess else img
         r = tfm(image=img_p, mask=np.zeros((H, W), np.uint8))
         x = r['image']
         x = (x.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD

@@ -97,7 +97,7 @@ def evaluate(model, loader, device):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--variant', default='b2', choices=['b0', 'b2'])
+    ap.add_argument('--variant', default='b2', choices=['b0','b1','b2','b3'])
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--batch', type=int, default=8)
     ap.add_argument('--lr', type=float, default=1e-4)

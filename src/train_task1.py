@@ -48,6 +48,23 @@ def tversky_loss(prob, target, alpha=0.3, beta=0.7, smooth=1e-6):
     return 1 - tversky.mean()
 
 
+def signed_distance_np(mask01):
+    """水平集距离图 φ：病灶内为负、外为正。Boundary Loss 用。
+    Level-set φ: negative inside lesion, positive outside. For Boundary Loss."""
+    from scipy.ndimage import distance_transform_edt
+    if mask01.sum() == 0:
+        return np.zeros_like(mask01, dtype=np.float32)
+    dt_in = distance_transform_edt(mask01)      # 病灶内到边界 / inside-to-boundary
+    dt_out = distance_transform_edt(1 - mask01)  # 病灶外到边界 / outside-to-boundary
+    return (dt_out - dt_in).astype(np.float32)  # 内负外正 / neg inside, pos outside
+
+
+def boundary_loss(prob, phi):
+    """Boundary Loss（Kervadec）：prob [B,1,H,W]，phi [B,1,H,W]（内负外正）。
+    Boundary Loss: prob [B,1,H,W], phi [B,1,H,W] (neg inside). 直接优化边界距离，降 HD95。"""
+    return (prob * phi).mean()
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, compute_hd=True):
     """评估。compute_hd=False 时跳过慢的 Hausdorff（训练中每轮用，快）。
@@ -75,7 +92,7 @@ def evaluate(model, loader, device, compute_hd=True):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--variant', default='b2', choices=['b0', 'b2'])
+    ap.add_argument('--variant', default='b2', choices=['b0','b1','b2','b3'])
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--batch', type=int, default=8)
     ap.add_argument('--lr', type=float, default=1e-4)
@@ -87,6 +104,8 @@ def main():
     ap.add_argument('--patience', type=int, default=10, help='早停耐心；0=不早停 / early stop patience; 0=off')
     ap.add_argument('--accum_steps', type=int, default=1, help='梯度累积步数；实际batch×accum=等效batch / grad accum')
     ap.add_argument('--resume', action='store_true', help='从 last.pth 断点续训 / resume from last.pth')
+    ap.add_argument('--boundary_loss', action='store_true', help='加 Boundary Loss 降 HD95（慢，需 phi 计算）/ add Boundary Loss to lower HD95')
+    ap.add_argument('--cosine_lr', action='store_true', help='余弦退火学习率 / cosine annealing LR')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -111,6 +130,7 @@ def main():
     model = build_segformer(args.variant).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.cosine_lr else None
 
     best = -1.0
     no_improve = 0
@@ -141,6 +161,11 @@ def main():
                 prob = F.softmax(out, dim=1)[:, 1:2]  # [B,1,H,W]
                 m = mask.unsqueeze(1).float()
                 loss = (ce + dice_loss(prob, m) + 0.5 * tversky_loss(prob, m)) / accum  # 梯度累积 / grad accum
+                if args.boundary_loss:  # 加 Boundary Loss 降 HD95（alpha 前 10 轮线性 ramp）/ Boundary Loss, alpha ramps over 10 eps
+                    phi = np.stack([signed_distance_np(mm) for mm in mask.cpu().numpy()]).astype(np.float32)
+                    phi = torch.from_numpy(phi).unsqueeze(1).to(device)
+                    alpha = min(1.0, (ep + 1) / 10.0)
+                    loss = loss + alpha * boundary_loss(prob, phi) / accum
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
                 scaler.step(opt)
@@ -149,6 +174,8 @@ def main():
             tot += loss.item() * accum
         d, i, _ = evaluate(model, va_dl, device, compute_hd=False)  # 训练中不算 HD95（快）
         print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', flush=True)
+        if sched is not None:
+            sched.step()  # 余弦退火 / cosine annealing
         if d > best:
             best = d
             no_improve = 0

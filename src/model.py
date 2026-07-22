@@ -8,8 +8,8 @@ from .config import PRETRAINED
 
 
 def build_segformer(variant='b2', num_labels=2):
-    """variant: 'b0'（轻量，快速）或 'b2'（主力）。返回 SegformerForSemanticSegmentation。
-    variant: 'b0' (lightweight, fast) or 'b2' (main). Returns SegformerForSemanticSegmentation."""
+    """variant: 'b0'/'b1'/'b2'/'b3'（越大越准越慢）。返回 SegformerForSemanticSegmentation。
+    variant: 'b0'/'b1'/'b2'/'b3' (bigger = more accurate but slower). Returns SegformerForSemanticSegmentation."""
     path = PRETRAINED[variant]
     model = SegformerForSemanticSegmentation.from_pretrained(
         path, num_labels=num_labels, ignore_mismatched_sizes=True

@@ -21,7 +21,9 @@ EXAMPLE_DIR = os.path.join(PROJ_DIR, 'example_result')
 
 PRETRAINED = {
     'b0': os.path.join(PROJ_DIR, 'pretrained', 'segformer-b0-ade'),
+    'b1': os.path.join(PROJ_DIR, 'pretrained', 'segformer-b1-ade'),
     'b2': os.path.join(PROJ_DIR, 'pretrained', 'segformer-b2-ade'),
+    'b3': os.path.join(PROJ_DIR, 'pretrained', 'segformer-b3-ade'),
     'sam': os.path.join(PROJ_DIR, 'pretrained', 'sam-vit-base'),
 }
 
