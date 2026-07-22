@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from .config import SEED, IMG_SIZE, OUT_DIR
 from .data import get_splits, Task1Dataset, build_cache
-from .model import build_model
+from .model import build_model, AttnWrapper
 from .metrics import dice_score, iou_score, hausdorff95
 
 
@@ -107,6 +107,8 @@ def main():
     ap.add_argument('--resume', action='store_true', help='从 last.pth 断点续训 / resume from last.pth')
     ap.add_argument('--boundary_loss', action='store_true', help='加 Boundary Loss 降 HD95（慢，需 phi 计算）/ add Boundary Loss to lower HD95')
     ap.add_argument('--cosine_lr', action='store_true', help='余弦退火学习率 / cosine annealing LR')
+    ap.add_argument('--freq_loss', action='store_true', help='频域解耦损失（LL Dice + HH MSE）/ freq-decoupled loss')
+    ap.add_argument('--ch_attn', action='store_true', help='通道注意力（SE）/ channel attention')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -129,6 +131,8 @@ def main():
                        shuffle=False, num_workers=args.num_workers)
 
     model = build_model(args.model, args.variant).to(device)
+    if args.ch_attn:  # 通道注意力 wrapper / channel attention wrapper
+        model = AttnWrapper(model, 2).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.cosine_lr else None
@@ -167,6 +171,9 @@ def main():
                     phi = torch.from_numpy(phi).unsqueeze(1).to(device)
                     alpha = min(1.0, (ep + 1) / 10.0)
                     loss = loss + alpha * boundary_loss(prob, phi) / accum
+                if args.freq_loss:  # 频域解耦：LL Dice + HH MSE / freq decoupled loss
+                    from .freq_utils import freq_loss as fl
+                    loss = loss + fl(prob, m) * 0.3 / accum
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
                 scaler.step(opt)

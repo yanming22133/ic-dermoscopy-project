@@ -28,8 +28,30 @@
 | 11 | **集成推理**（多 ckpt 概率平均） | Task1 | IoU +0.5~1.5 | 中 | ✅ 代码就绪（--ensemble） |
 | 12 | **SegFormer B1/B2/B3 选项** | Task1/2 | B3 vs B2 +0.3~0.8 | 中 | ✅ 代码就绪（--variant b1/b2/b3） |
 | 13 | **DINOv2 检索 + 病灶裁剪**（双特征对比） | Bonus | 相关性 +10% | 低 | ✅ 代码就绪（bonus_clip --encoder dinov2） |
+| 14 | **🆕 频域解耦损失**（Haar DWT：LL Dice + HH MSE，分频单独优化形状/边界） | Task1 | HD95 显著降（直接填 ViT 高频短板） | 中 | 低 | DDA 频域方法论逆向应用：把高频边界梯度独立注入 ViT |
+| 15 | **🆕 通道注意力**（SE/ECA，解码器每层加通道重标定，~百参数） | Task1/2 | IoU +0.2~0.5 | 极低 | 低 | 特征降维精炼，抑制噪声通道 |
+| 16 | **🆕 DWT 数据增强**（训练时随机 DWT 分解→调频带权重→逆变换，强制模型不依赖单一频带） | Task1/2 | Dice +0.3~0.5，泛化↑ | 低 | 低 | DDA I1 多尺度 DWT 思路反向 |
+| 17 | **🆕 ConvNeXt/Swin backbone**（现代 CNN，对 2700 张数据更友好，天然高频感知强于 ViT） | Task1/2 | HD95 ↓ + IoU ↑ | 中 | 低 | 有预训练权重 |
 
 ## Tier 2 — 仅记录，本轮不训练 / Documented only, not trained
+
+| # | 改进项 | 模块 | 预期增益 | 成本 | 风险 | 依据 |
+|---|---|---|---|---|---|---|
+| 18 | **PEFT-SAM 当主力**（冻结 encoder，训 decoder+LoRA） | Task1 | IoU +1~2 | 中高 | 中 | PEFT-MedSAM 2026.06 IoU 0.8918 |
+| 19 | **Mamba 消融**（UltraLBM-UNet，需 mamba_ssm） | Task1 | 可能 +0.5 | 低 | 高（Win） | CVPR 2026 |
+| 20 | **多任务联合训练**（Task1+Task2 共享 encoder） | Task1/2 | 各 +0.5~1 | 中 | 中 | 表示共享互益 |
+| 21 | **多尺度特征金字塔**（SegFormer 四层特征再融合，保留低频细节） | Task1 | HD95↓ IoU↑ | 中 | 中 | FPN 类结构补偿 1/4 分辨率损失 |
+| 22 | **DermINO backbone** | Bonus/Task2 | +1~2 | 中 | 中 | 皮肤科 FM 2025 |
+| 23 | **RAG 措辞增强** | Task3/Bonus | 可读性↑ | 中 | 中 | MMed-RAG ICLR2025 |
+
+## Tier 3 — 理论方向，8GB 不可行 / Theoretical, not feasible on 8GB
+
+| # | 改进项 | 模块 | 预期增益 | 成本 | 风险 | 依据 |
+|---|---|---|---|---|---|---|
+| 24 | **扩散模型分割**（MLFFM-SegDiff） | Task1 | +1~2 | 极高 | 极高（8GB OOM） | MLFFM-SegDiff 2026.06 |
+| 25 | **MedSAM ViT-H 全量 PEFT** | Task1 | +0.5~1 | 极高 | 高（OOM） | PEFT-MedSAM |
+| 26 | **VAE 潜空间流形约束**（冻结 VAE 编码器 → latent 特征对齐） | Task1 | 边界一致性↑ | 高 | 中（8GB临界） | DDIM 降维思路，但轻量版 |
+| 27 | **扩散模型推理精修**（冻结扩散 U-Net → 交叉注意力 → 边界引导） | Task1 | 边界锐利↑ | 中 | 中 | DDA 论文的潜空间牵引逆向用 |
 
 | # | 改进项 | 模块 | 预期增益 | 成本 | 风险 | 依据 |
 |---|---|---|---|---|---|---|

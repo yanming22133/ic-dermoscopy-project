@@ -15,6 +15,35 @@ import albumentations as A
 from .config import IMAGE_DIR, TASK1_GT_DIR, TASK2_GT_DIR, ATTRS_FILE, SEED, IMG_SIZE, CACHE_DIR
 from .preprocessing import preprocess
 
+
+def dwt_augment(img, p=0.3, hh_scale=(0.5, 2.0)):
+    """DWT 频域数据增强：Haar 分解→随机调 HH 幅度→逆变换。
+    强制模型不依赖单一高频强度，提升边界泛化。img: HxWx3 uint8。
+    DWT freq-domain augment: Haar decompose → random HH scale → inverse.
+    Makes model robust to varying HF strengths. img: HxWx3 uint8."""
+    if np.random.random() > p:
+        return img
+    img_f = img.astype(np.float32)
+    out = np.zeros_like(img_f)
+    for c in range(img_f.shape[-1]):
+        ch = img_f[:, :, c]
+        # Haar DWT
+        ll = (ch[0::2, 0::2] + ch[0::2, 1::2] + ch[1::2, 0::2] + ch[1::2, 1::2]) / 4.0
+        lh = (ch[0::2, 0::2] - ch[0::2, 1::2] + ch[1::2, 0::2] - ch[1::2, 1::2]) / 4.0
+        hl = (ch[0::2, 0::2] + ch[0::2, 1::2] - ch[1::2, 0::2] - ch[1::2, 1::2]) / 4.0
+        hh = (ch[0::2, 0::2] - ch[0::2, 1::2] - ch[1::2, 0::2] + ch[1::2, 1::2]) / 4.0
+        # 随机调高频 / random scale high-freq
+        s = np.random.uniform(*hh_scale)
+        lh *= s; hl *= s; hh *= s
+        # 逆 Haar / inverse Haar
+        oc = np.zeros_like(ch)
+        oc[0::2, 0::2] = ll + lh + hl + hh
+        oc[0::2, 1::2] = ll - lh + hl - hh
+        oc[1::2, 0::2] = ll + lh - hl - hh
+        oc[1::2, 1::2] = ll - lh - hl + hh
+        out[:, :, c] = np.clip(oc, 0, 255)
+    return out.astype(np.uint8)
+
 IMAGENET_MEAN = np.array((0.485, 0.456, 0.406), dtype=np.float32)
 IMAGENET_STD = np.array((0.229, 0.224, 0.225), dtype=np.float32)
 
@@ -122,12 +151,13 @@ def compute_sample_weights(ids, rare_attrs=('negative_network', 'streaks'), rare
 
 
 class Task1Dataset(torch.utils.data.Dataset):
-    def __init__(self, ids, train=True, size=IMG_SIZE, do_preprocess=True, use_cache=True):
+    def __init__(self, ids, train=True, size=IMG_SIZE, do_preprocess=True, use_cache=True, dwt_aug=False):
         self.ids = ids
         self.train = train
         self.tfm = get_transforms(train, size)
         self.do_preprocess = do_preprocess
         self.use_cache = use_cache
+        self.dwt_aug = dwt_aug
 
     def __len__(self):
         return len(self.ids)
@@ -137,6 +167,8 @@ class Task1Dataset(torch.utils.data.Dataset):
             img = load_image_pp(self.ids[i]) if self.use_cache else preprocess(load_image(self.ids[i]))
         else:
             img = load_image(self.ids[i])
+        if self.dwt_aug and self.train:  # DWT频域增强 / DWT freq augment
+            img = dwt_augment(img)
         mask = load_task1_mask(self.ids[i])
         r = self.tfm(image=img, mask=mask)
         img, mask = r['image'], r['mask']
@@ -161,12 +193,13 @@ def load_task2_masks(image_id, gt_dir=TASK2_GT_DIR):
 class Task2Dataset(torch.utils.data.Dataset):
     """Task2 多标签分割数据集。返回 (img, mask[B,5,H,W], id)。
     Task2 multi-label segmentation dataset. Returns (img, mask[B,5,H,W], id)."""
-    def __init__(self, ids, train=True, size=IMG_SIZE, do_preprocess=True, use_cache=True):
+    def __init__(self, ids, train=True, size=IMG_SIZE, do_preprocess=True, use_cache=True, dwt_aug=False):
         self.ids = ids
         self.train = train
         self.tfm = get_transforms(train, size)
         self.do_preprocess = do_preprocess
         self.use_cache = use_cache
+        self.dwt_aug = dwt_aug
 
     def __len__(self):
         return len(self.ids)
@@ -176,6 +209,8 @@ class Task2Dataset(torch.utils.data.Dataset):
             img = load_image_pp(self.ids[i]) if self.use_cache else preprocess(load_image(self.ids[i]))
         else:
             img = load_image(self.ids[i])
+        if self.dwt_aug and self.train:  # DWT频域增强 / DWT freq augment
+            img = dwt_augment(img)
         masks = load_task2_masks(self.ids[i])  # [H,W,5]
         # albumentations 用 masks= 传多张 mask，同步变换 / pass multiple masks via masks=, transformed in sync
         r = self.tfm(image=img, masks=[masks[..., k] for k in range(masks.shape[-1])])
