@@ -34,6 +34,9 @@ def main():
     ap.add_argument('--do_preprocess', type=int, default=1)
     ap.add_argument('--tta', type=int, default=1, help='Tier1: 翻转 TTA 1/0 / flip TTA')
     ap.add_argument('--sam_refine', type=int, default=0, help='Tier1: SAM 边界精修 1/0 / SAM refine')
+    ap.add_argument('--postproc', type=int, default=1, help='后处理：形态学+最大连通域 1/0 / morphology+CC')
+    ap.add_argument('--ms_tta', type=int, default=1, help='多尺度 TTA 1/0 / multi-scale TTA')
+    ap.add_argument('--diffusion_refine', type=int, default=0, help='扩散模型边界精修（需4090+diffusers）/ diffusion refine')
     ap.add_argument('--skip_bonus', action='store_true')
     args = ap.parse_args()
 
@@ -45,15 +48,16 @@ def main():
 
     print('===== [1/4] Task1 病灶分割 / lesion segmentation =====', flush=True)
     infer_task1.infer(SimpleNamespace(
-        ckpt=args.task1_ckpt, split='test', image_dir=args.test_dir,
+        ckpt=args.task1_ckpt, ensemble=None, split='test', image_dir=args.test_dir,
         save_dir=t1_dir, do_preprocess=args.do_preprocess,
-        tta=args.tta, sam_refine=args.sam_refine))
+        tta=args.tta, ms_tta=args.ms_tta, sam_refine=args.sam_refine,
+        postproc=args.postproc, diffusion_refine=args.diffusion_refine))
 
     print('===== [2/4] Task2 属性检测 / attribute detection =====', flush=True)
     infer_task2.infer(SimpleNamespace(
         ckpt=args.task2_ckpt, task1_mask_dir=t1_dir, split='test',
         image_dir=args.test_dir, save_dir=t2_dir, do_preprocess=args.do_preprocess,
-        tta=args.tta))
+        tta=args.tta, ms_tta=args.ms_tta))
 
     print('===== [3/4] Task3 锚定报告 / anchored report =====', flush=True)
     report_task3.run(SimpleNamespace(
