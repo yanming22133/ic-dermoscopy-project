@@ -167,7 +167,7 @@ class Task1Dataset(torch.utils.data.Dataset):
             img = load_image_pp(self.ids[i]) if self.use_cache else preprocess(load_image(self.ids[i]))
         else:
             img = load_image(self.ids[i])
-        if self.dwt_aug and self.train:  # DWT频域增强 / DWT freq augment
+        if getattr(self, 'dwt_aug', False) and self.train:  # DWT频域增强 / DWT freq augment
             img = dwt_augment(img)
         mask = load_task1_mask(self.ids[i])
         r = self.tfm(image=img, mask=mask)
@@ -209,7 +209,7 @@ class Task2Dataset(torch.utils.data.Dataset):
             img = load_image_pp(self.ids[i]) if self.use_cache else preprocess(load_image(self.ids[i]))
         else:
             img = load_image(self.ids[i])
-        if self.dwt_aug and self.train:  # DWT频域增强 / DWT freq augment
+        if getattr(self, 'dwt_aug', False) and self.train:  # DWT频域增强 / DWT freq augment
             img = dwt_augment(img)
         masks = load_task2_masks(self.ids[i])  # [H,W,5]
         # albumentations 用 masks= 传多张 mask，同步变换 / pass multiple masks via masks=, transformed in sync

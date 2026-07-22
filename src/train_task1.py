@@ -109,6 +109,7 @@ def main():
     ap.add_argument('--cosine_lr', action='store_true', help='余弦退火学习率 / cosine annealing LR')
     ap.add_argument('--freq_loss', action='store_true', help='频域解耦损失（LL Dice + HH MSE）/ freq-decoupled loss')
     ap.add_argument('--ch_attn', action='store_true', help='通道注意力（SE）/ channel attention')
+    ap.add_argument('--diffusion_loss', action='store_true', help='扩散潜空间流形对齐损失（需4090+diffusers）/ SD latent manifold alignment loss')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -136,6 +137,10 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.cosine_lr else None
+    diff_align = None
+    if args.diffusion_loss:  # 潜空间流形对齐（4090+）/ latent manifold alignment
+        from .diffusion_loss import DiffusionAlignLoss
+        diff_align = DiffusionAlignLoss(device)
 
     best = -1.0
     no_improve = 0
@@ -174,6 +179,8 @@ def main():
                 if args.freq_loss:  # 频域解耦：LL Dice + HH MSE / freq decoupled loss
                     from .freq_utils import freq_loss as fl
                     loss = loss + fl(prob, m) * 0.3 / accum
+                if diff_align is not None and ep >= 5:  # 潜空间流形牵引（跳过前5轮）/ manifold steering (skip first 5 eps)
+                    loss = loss + diff_align(prob, m) * 0.1 / accum
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
                 scaler.step(opt)

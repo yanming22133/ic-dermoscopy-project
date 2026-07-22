@@ -92,6 +92,10 @@ def infer(args):
     if args.sam_refine:  # Tier1: SAM 边界精修 / SAM boundary refinement
         print('loading SAM for boundary refinement...', flush=True)
         sam_model, sam_proc = sam_refine.load_sam(device)
+    sd_unet = None
+    if args.diffusion_refine:  # 扩散边界精修（4090+）/ diffusion boundary refine
+        from .diffusion_refine import load_sd_unet
+        sd_unet = load_sd_unet(device)
 
     # 决定要跑哪些图 / decide which images to run
     if args.image_dir:
@@ -135,6 +139,9 @@ def infer(args):
             pred01 = sam_refine.refine_mask(sam_model, sam_proc, img_p, pred01, device)
         if args.postproc:  # 后处理：形态学+最大连通域 / postprocess: morphology + largest CC
             pred01 = postprocess(pred01)
+        if sd_unet is not None:  # 扩散模型边界精修 / diffusion boundary refine
+            from .diffusion_refine import diffusion_refine_mask
+            pred01 = diffusion_refine_mask(sd_unet, img_p, pred01, device)
         pred = pred01 * 255  # 0/255，匹配 example / 0/255, matches example
 
         if save_dir:
@@ -169,6 +176,7 @@ def main():
     ap.add_argument('--sam_refine', type=int, default=0, help='Tier1: SAM 边界精修 1/0 / SAM boundary refine')
     ap.add_argument('--postproc', type=int, default=0, help='后处理：形态学+最大连通域 1/0 / morphology + largest CC')
     ap.add_argument('--ms_tta', type=int, default=0, help='多尺度 TTA：0.8x/1.0x/1.2x 平均 1/0 / multi-scale TTA')
+    ap.add_argument('--diffusion_refine', type=int, default=0, help='扩散模型边界精修 1/0（需4090+diffusers）/ diffusion boundary refine')
     args = ap.parse_args()
     if not args.ckpt and not args.ensemble:
         ap.error('必须给 --ckpt 或 --ensemble / must give --ckpt or --ensemble')
