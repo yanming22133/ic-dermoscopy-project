@@ -99,8 +99,8 @@ class AttnWrapper(nn.Module):
         self.model = model
         self.attn = ChannelAttention2D(channels)
 
-    def forward(self, pixel_values):
-        out = self.model(pixel_values=pixel_values)
+    def forward(self, pixel_values, **kwargs):
+        out = self.model(pixel_values=pixel_values, **kwargs)
         out.logits = self.attn(out.logits)  # 即插通道精炼 / per-channel refinement
         return out
 

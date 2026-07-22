@@ -96,8 +96,8 @@ def evaluate(model, loader, device, compute_hd=True, model_type='segformer'):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--model', default='segformer', choices=['segformer','deeplab','convnext','peft_sam'])
-    ap.add_argument('--variant', default='b2', choices=['b0','b1','b2','b3'])
+    ap.add_argument('--model', default='peft_sam', choices=['segformer','deeplab','peft_sam'])
+    ap.add_argument('--variant', default='vit-b', choices=['b0','b1','b2','b3','vit-b','vit-l','vit-h'])
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--batch', type=int, default=8)
     ap.add_argument('--lr', type=float, default=1e-4)
@@ -115,6 +115,10 @@ def main():
     ap.add_argument('--ch_attn', action='store_true', help='通道注意力（SE）/ channel attention')
     ap.add_argument('--diffusion_loss', action='store_true', help='扩散潜空间流形对齐损失（需4090+diffusers）/ SD latent manifold alignment loss')
     args = ap.parse_args()
+
+    if args.model == 'peft_sam' and args.size != 1024:  # SAM 需 1024 输入 / SAM expects 1024
+        print(f'[auto] --size {args.size}→1024 (SAM requires 1024)', flush=True)
+        args.size = 1024
 
     set_seed(SEED)
     os.makedirs(args.out, exist_ok=True)
@@ -187,7 +191,7 @@ def main():
                 if args.freq_loss:  # 频域解耦：LL Dice + HH MSE / freq decoupled loss
                     from .freq_utils import freq_loss as fl
                     loss = loss + fl(prob, m) * 0.3 / accum
-                if diff_align is not None and ep >= 5:  # 潜空间流形牵引（跳过前5轮）/ manifold steering (skip first 5 eps)
+                if diff_align is not None and ep >= 5 and i % 10 == 0:  # 每 10 batch 一次，避免 VAE+UNet 拖慢 / every 10 batches
                     loss = loss + diff_align(prob, m) * 0.1 / accum
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):

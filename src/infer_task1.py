@@ -134,15 +134,16 @@ def infer(args):
             prob = np.stack(probs).mean(0)
         else:
             prob = predict_prob(models, x, H, W, tta=bool(args.tta))  # Tier1: TTA + 集成 / TTA + ensemble
-        pred01 = (prob >= 0.5).astype(np.uint8)
-        if sam_model is not None:  # Tier1: SAM 精修边界 / SAM refine boundary
+        pred01_raw = (prob >= 0.5).astype(np.uint8)  # 原始预测，HD95 用它算（不受后处理影响）
+        pred01 = pred01_raw.copy()
+        if sam_model is not None:
             pred01 = sam_refine.refine_mask(sam_model, sam_proc, img_p, pred01, device)
-        if args.postproc:  # 后处理：形态学+最大连通域 / postprocess: morphology + largest CC
+        if args.postproc:
             pred01 = postprocess(pred01)
-        if sd_unet is not None:  # 扩散模型边界精修 / diffusion boundary refine
+        if sd_unet is not None:
             from .diffusion_refine import diffusion_refine_mask
             pred01 = diffusion_refine_mask(sd_unet, img_p, pred01, device)
-        pred = pred01 * 255  # 0/255，匹配 example / 0/255, matches example
+        pred = pred01 * 255
 
         if save_dir:
             Image.fromarray(pred, mode='L').save(os.path.join(save_dir, iid + '.jpg'))
@@ -150,10 +151,12 @@ def infer(args):
         gt_path = os.path.join(TASK1_GT_DIR, iid + '_segmentation.png')
         if os.path.exists(gt_path):
             gt = (np.array(Image.open(gt_path).convert('L')) > 127).astype(np.uint8)
+            # 最终指标（提交版） / final metrics (submitted)
             pb = (pred > 127).astype(np.uint8)
             dices.append(dice_score(pb, gt))
             ious.append(iou_score(pb, gt))
-            hd = hausdorff95(pb, gt)
+            # HD95 用原始预测算（不被后处理干扰）/ HD95 on raw pred (not affected by postproc)
+            hd = hausdorff95(pred01_raw, gt)
             if not np.isnan(hd):
                 hds.append(hd)
 

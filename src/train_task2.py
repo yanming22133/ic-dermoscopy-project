@@ -66,6 +66,7 @@ def evaluate(model, loader, device):
     n = len(ATTRS_FILE)
     dices = [[] for _ in range(n)]; ious = [[] for _ in range(n)]
     pres_correct = [0] * n; pres_total = [0] * n
+    roi_cache = {}
     for img, mask, ids in loader:
         img = img.to(device); mask = mask.to(device)
         out = model(pixel_values=img).logits
@@ -74,8 +75,9 @@ def evaluate(model, loader, device):
         pred = (prob >= 0.5).cpu().numpy().astype(np.uint8)
         gt = mask.cpu().numpy().astype(np.uint8)
         for b, iid in enumerate(ids):
-            # ROI 用 GT 病灶 mask（val 阶段隔离 Task2 质量）/ ROI = GT lesion mask (isolate Task2 on val)
-            roi = load_task1_mask(iid).astype(bool)
+            if iid not in roi_cache:
+                roi_cache[iid] = load_task1_mask(iid).astype(bool)
+            roi = roi_cache[iid]
             for c in range(n):
                 p, g = pred[b, c], gt[b, c]
                 inter = (p & g).sum(); union = (p | g).sum()
