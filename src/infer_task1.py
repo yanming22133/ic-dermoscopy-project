@@ -22,7 +22,7 @@ from PIL import Image
 from .config import IMAGE_DIR, TASK1_GT_DIR, OUT_DIR, SEED
 from .data import get_splits, load_image, load_image_pp, get_transforms, IMAGENET_MEAN, IMAGENET_STD, list_image_ids
 from .preprocessing import preprocess
-from .model import build_segformer
+from .model import build_model
 from .metrics import dice_score, iou_score, hausdorff95
 from . import sam_refine
 
@@ -79,8 +79,9 @@ def infer(args):
     for cp in ckpt_paths:
         ck = torch.load(cp, map_location=device, weights_only=False)
         size = ck.get('size', 512)
+        model_type = ck.get('model_type', 'segformer')
         variant = ck.get('variant', 'b2')
-        m = build_segformer(variant).to(device)
+        m = build_model(model_type, variant).to(device)
         m.load_state_dict(ck['model'])
         m.eval()
         models.append(m)

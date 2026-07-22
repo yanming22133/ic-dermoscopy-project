@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from .config import SEED, IMG_SIZE, OUT_DIR
 from .data import get_splits, Task1Dataset, build_cache
-from .model import build_segformer
+from .model import build_model
 from .metrics import dice_score, iou_score, hausdorff95
 
 
@@ -92,6 +92,7 @@ def evaluate(model, loader, device, compute_hd=True):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--model', default='segformer', choices=['segformer','deeplab'])
     ap.add_argument('--variant', default='b2', choices=['b0','b1','b2','b3'])
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--batch', type=int, default=8)
@@ -111,7 +112,7 @@ def main():
     set_seed(SEED)
     os.makedirs(args.out, exist_ok=True)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print('device:', device, '| variant:', args.variant, '| size:', args.size, flush=True)
+    print('device:', device, '| model:', args.model, '| variant:', args.variant, '| size:', args.size, flush=True)
 
     tr, va, te = get_splits()
     if args.max_train > 0:
@@ -127,7 +128,7 @@ def main():
     va_dl = DataLoader(Task1Dataset(va, False, args.size), batch_size=args.batch,
                        shuffle=False, num_workers=args.num_workers)
 
-    model = build_segformer(args.variant).to(device)
+    model = build_model(args.model, args.variant).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs) if args.cosine_lr else None
@@ -179,7 +180,7 @@ def main():
         if d > best:
             best = d
             no_improve = 0
-            torch.save({'model': model.state_dict(), 'variant': args.variant, 'size': args.size,
+            torch.save({'model': model.state_dict(), 'model_type': args.model, 'variant': args.variant, 'size': args.size,
                         'dice': d, 'iou': i, 'epoch': ep + 1}, best_path)
             json.dump({'dice': d, 'iou': i, 'epoch': ep + 1},
                       open(os.path.join(args.out, 'best_metrics.json'), 'w'), indent=2)
@@ -187,7 +188,7 @@ def main():
             no_improve += 1
         # 每轮存 last.pth，崩了能续 / save last.pth every epoch for crash recovery
         torch.save({'model': model.state_dict(), 'opt': opt.state_dict(), 'epoch': ep + 1,
-                    'best': best, 'no_improve': no_improve}, last_path)
+                    'best': best, 'no_improve': no_improve, 'model_type': args.model, 'variant': args.variant}, last_path)
         if args.patience > 0 and no_improve >= args.patience:
             print(f'early stopping at ep {ep+1} (no improve {no_improve} epochs)', flush=True)
             break
