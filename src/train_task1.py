@@ -66,19 +66,23 @@ def boundary_loss(prob, phi):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, compute_hd=True):
+def evaluate(model, loader, device, compute_hd=True, model_type='segformer'):
     """评估。compute_hd=False 时跳过慢的 Hausdorff（训练中每轮用，快）。
     Eval. compute_hd=False skips the slow Hausdorff (used during training, fast)."""
     model.eval()
     dices, ious, hds = [], [], []
     for img, mask, _ in loader:
         img = img.to(device)
-        mask = mask.to(device)
-        out = model(pixel_values=img).logits
-        out = F.interpolate(out, size=mask.shape[-2:], mode='bilinear', align_corners=False)
+        mask_gpu = mask.to(device)
+        # peft_sam 需要 gt_mask 做 box prompt / peft_sam needs gt_mask as box prompt
+        if model_type == 'peft_sam':
+            out = model(pixel_values=img, gt_mask=mask_gpu).logits
+        else:
+            out = model(pixel_values=img).logits
+        out = F.interpolate(out, size=mask_gpu.shape[-2:], mode='bilinear', align_corners=False)
         prob = F.softmax(out, dim=1)[:, 1]
         pred = (prob >= 0.5).cpu().numpy().astype(np.uint8)
-        gt = mask.cpu().numpy().astype(np.uint8)
+        gt = mask_gpu.cpu().numpy().astype(np.uint8)
         for p, g in zip(pred, gt):
             dices.append(dice_score(p, g))
             ious.append(iou_score(p, g))
@@ -92,7 +96,7 @@ def evaluate(model, loader, device, compute_hd=True):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--model', default='segformer', choices=['segformer','deeplab'])
+    ap.add_argument('--model', default='segformer', choices=['segformer','deeplab','convnext','peft_sam'])
     ap.add_argument('--variant', default='b2', choices=['b0','b1','b2','b3'])
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--batch', type=int, default=8)
@@ -165,7 +169,11 @@ def main():
             img = img.to(device)
             mask = mask.to(device)
             with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
-                out = model(pixel_values=img).logits
+                # peft_sam 需要 gt_mask 做 box prompt / peft_sam needs gt_mask as box prompt
+                if args.model == 'peft_sam':
+                    out = model(pixel_values=img, gt_mask=mask).logits
+                else:
+                    out = model(pixel_values=img).logits
                 out = F.interpolate(out, size=mask.shape[-2:], mode='bilinear', align_corners=False)
                 ce = F.cross_entropy(out, mask)
                 prob = F.softmax(out, dim=1)[:, 1:2]  # [B,1,H,W]
@@ -187,7 +195,7 @@ def main():
                 scaler.update()
                 opt.zero_grad()
             tot += loss.item() * accum
-        d, i, _ = evaluate(model, va_dl, device, compute_hd=False)  # 训练中不算 HD95（快）
+        d, i, _ = evaluate(model, va_dl, device, compute_hd=False, model_type=args.model)  # 训练中不算 HD95（快）
         print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', flush=True)
         if sched is not None:
             sched.step()  # 余弦退火 / cosine annealing
@@ -215,7 +223,7 @@ def main():
     te_dl = DataLoader(Task1Dataset(te, False, args.size), batch_size=args.batch,
                        shuffle=False, num_workers=args.num_workers)
     for name, dl in [('val', va_dl), ('test-local', te_dl)]:
-        d, i, h = evaluate(model, dl, device, compute_hd=True)
+        d, i, h = evaluate(model, dl, device, compute_hd=True, model_type=args.model)
         print(f'{name}: Dice={d:.4f} IoU={i:.4f} HD95={h:.2f}', flush=True)
         if name == 'val':
             json.dump({'dice': d, 'iou': i, 'hd95': h}, open(os.path.join(args.out, 'final_val_metrics.json'), 'w'), indent=2)

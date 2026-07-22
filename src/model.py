@@ -1,10 +1,11 @@
-"""分割模型：SegFormer（MiT backbone）或 DeepLabV3+（ResNet101 + ASPP）。
-Segmentation models: SegFormer (MiT backbone) or DeepLabV3+ (ResNet101 + ASPP).
+"""分割模型：SegFormer、DeepLabV3+、ConvNeXt+FPN、PEFT-SAM。
+Segmentation models: SegFormer, DeepLabV3+, ConvNeXt+FPN, PEFT-SAM.
 
-DeepLabV3+ 优势：ASPP 多尺度池化直接利好不规则边界（HD95），且 ResNet 卷积编码器
-对 2700 张数据量更友好（不像纯 ViT 那么吃数据）。
-DeepLabV3+ advantage: ASPP multi-scale pooling directly helps irregular boundaries (HD95),
-and the ResNet conv. encoder is more data-efficient than pure ViT for 2700 images.
+支持的模型 / Supported models:
+  - 'segformer'  (--variant b0/b1/b2/b3): MIT backbone, ADE pretrained
+  - 'deeplab':    DeepLabV3+ ResNet101 + ASPP, COCO/VOC pretrained
+  - 'convnext'    (--variant tiny/small/base/large): ConvNeXt + FPN, ImageNet pretrained
+  - 'peft_sam':   PEFT-SAM (freeze encoder, train mask_decoder + optional LoRA), SAM pretrained
 """
 import torch
 import torch.nn as nn
@@ -50,9 +51,6 @@ def build_deeplabv3(num_labels=2):
     return DeepLabModel(num_labels)
 
 
-# ----- 统一 builder / unified builder -----
-def build_model(model_type='segformer', variant='b2', num_labels=2):
-    """model_type: 'segformer' or 'deeplab'. Returns a segmentation model."""
 # ----- ConvNeXt + FPN -----
 class ConvNeXtSeg(nn.Module):
     """ConvNeXt backbone + FPN decoder。CNN 天然高频感知强于 ViT，边界更锐。
@@ -108,8 +106,24 @@ class AttnWrapper(nn.Module):
 
 
 # ----- 统一 builder / unified builder -----
-def build_model(model_type='segformer', variant='b2', num_labels=2):
-    """model_type: 'segformer' / 'deeplab' / 'convnext'. Return a segmentation model."""
+def build_model(model_type='segformer', variant='b2', num_labels=2, **kwargs):
+    """统一模型构造入口 / Unified model construction entry.
+
+    Args:
+        model_type: 'segformer' / 'deeplab' / 'convnext' / 'peft_sam'
+        variant:    backbone 版本 / backbone variant (e.g. 'b2', 'base', etc.)
+        num_labels: 分类数 / number of classes (default 2 for binary)
+        **kwargs:   传递给特定模型（如 peft_sam 的 use_lora, lora_rank）
+                    Passed to specific models (e.g. use_lora, lora_rank for peft_sam)
+
+    Returns:
+        分割模型，forward 返回带 .logits 的对象 / Segmentation model with .logits output
+    """
+    if model_type == 'peft_sam':
+        from .model_sam import build_sam
+        use_lora = kwargs.get('use_lora', False)
+        lora_rank = kwargs.get('lora_rank', 4)
+        return build_sam(num_labels=num_labels, use_lora=use_lora, lora_rank=lora_rank)
     if model_type == 'convnext':
         return build_convnext(variant, num_labels)
     if model_type == 'deeplab':
