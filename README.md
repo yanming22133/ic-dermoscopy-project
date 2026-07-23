@@ -25,6 +25,19 @@ Group 2 · Imperial College DSI Summer School · 2026-07-21 → 2026-07-31.
 
 Data / weights / outputs are **gitignored** (see `.gitignore`): the 10 GB training data and 134 MB weights are re-fetched via `scripts/`; `outputs/` is generated.
 
+## Code versions / 代码版本
+
+| Version | Location | Description |
+|---|---|---|
+| **v1 SegFormer baseline** | `src/train_task1.py --model segformer --variant b2` | B2 Dice 0.904 / HD95 24.75 (laptop) |
+| **v2 PEFT-SAM** (current main) | `src/train_task1.py --model peft_sam` | 4090 training, epoch 31 Dice 0.944 |
+| **v3 Plug-in modules** | `src/improvements/` | EWT fusion / Edge branch / Boundary smooth / Attr heads / GCN |
+| **v3 Not wired yet** | `src/diffusion_loss.py`, `src/diffusion_refine.py` | Latent manifold + diffusion refine (SD weights pending) |
+| **Task2** | `src/train_task2.py --model segformer --variant b2` | Focal + balanced + edge loss |
+| **Task3** | `src/report_task3.py` | Rule template + consistency check |
+| **Bonus** | `src/bonus_clip.py` | CLIP/DINOv2 retrieval + RAG |
+| **One-click** | `run_inference.py` | Task1→2→3→Bonus end-to-end |
+
 ## Environment (important)
 
 Only use this Python — not the `python` on PATH (that one is CPU-only):
