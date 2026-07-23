@@ -92,11 +92,54 @@ IC DSI Summer School (Group 2)。三个 Task + Bonus：
 
 ---
 
-## 六、当前立即要做的
+## 六、当前正在跑
 
-1. **Task1 推理**（AutoDL 终端1）：等两轮 SAM 推理跑完，贴 Dice/IoU/HD95
-2. **Task2 训练**（AutoDL 终端2）：并行开跑
-3. **下载 best.pth**：从 AutoDL 拖到本地（`/root/autodl-tmp/ic-dermoscopy-project/outputs/task1_sam/best.pth` → 本地 `F:\Desktop\IC\project\outputs\`）
+**AutoDL 终端1：Task1 SAM v3 训练**
+```bash
+python -u -m src.train_task1 --model peft_sam --epochs 50 --batch 4 --accum_steps 2 --size 1024 --num_workers 8 --boundary_loss --cosine_lr --freq_loss --edge_loss 0.3 --hd_score --patience 10 --out outputs/task1_sam_v3
+```
+含：freq_loss + Boundary + Tversky + edge_loss(Sobel) + HD95每轮 + 综合评分选最佳
+
+**AutoDL 终端2：Task2 训练（待启动）**
+```bash
+cd /root/autodl-tmp/ic-dermoscopy-project
+python -u -m src.train_task2 --epochs 50 --batch 16 --size 512 --num_workers 8 --cosine_lr --balanced 1 --edge_loss 0.5 --patience 10 --out outputs/task2_b2
+```
+
+---
+
+## 六-B：上传文件清单
+
+**Task1（v3 SAM 已在跑，以下已上传）：**
+- `src/train_task1.py`
+- `src/model_sam.py`（含 numpy import + 两轮 bbox 缩放修复）
+- `src/improvements/`（整个文件夹：5个模块）
+- `src/infer_task1.py`（含 boundary_smooth 接线）
+
+**Task2（需上传以下到 AutoDL）：**
+- `src/train_task2.py`（含 tqdm + edge_loss）
+- `src/infer_task2.py`（含 attr_rules + ms_tta）
+- `src/task2_attr_graph.py`
+
+Task2 的 torch 版本问题：AutoDL 上 torch 2.5.1 不够，需先升级：
+```bash
+pip install torch==2.6.0 torchvision --index-url https://download.pytorch.org/whl/cu124
+```
+
+---
+
+## 六-C：Task1 v3 跑完后
+
+推理命令（SAM + 全部推理改进）：
+```bash
+python -u -m src.infer_task1 --ckpt outputs/task1_sam_v3/best.pth --split val \
+  --tta 1 --postproc 1 --boundary_smooth 1
+```
+
+## 六-D：综合评分公式
+
+`score = Dice × 0.7 + IoU × 0.4 − HD95 / 500`
+满分约 1.1（Dice=1,IoU=1,HD95=0）。当前 v3 训练中按此公式选最佳 checkpoint。
 
 ---
 

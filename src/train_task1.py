@@ -212,7 +212,7 @@ def main():
         print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', end='', flush=True)
         if args.hd_score:
             print(f' HD95={h:.2f}', end='', flush=True)
-            score = d * 0.5 + i * 0.3 - h / 500  # 综合：Dice优先+IoU+HD95
+            score = d * 0.7 + i * 0.4 - h / 500  # 综合：Dice主+IoU辅-HD95罚（满分≈1.1）
         else:
             score = d
         print(f'  score={score:.4f}', flush=True)
