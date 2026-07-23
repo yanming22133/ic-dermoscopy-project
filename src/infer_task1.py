@@ -140,6 +140,9 @@ def infer(args):
             pred01 = sam_refine.refine_mask(sam_model, sam_proc, img_p, pred01, device)
         if args.postproc:
             pred01 = postprocess(pred01)
+        if args.boundary_smooth:
+            from .improvements.boundary_smooth import boundary_smooth
+            pred01 = boundary_smooth(pred01)
         if sd_unet is not None:
             from .diffusion_refine import diffusion_refine_mask
             pred01 = diffusion_refine_mask(sd_unet, img_p, pred01, device)
@@ -178,6 +181,7 @@ def main():
     ap.add_argument('--tta', type=int, default=0, help='Tier1: 翻转 TTA 1/0 / flip TTA')
     ap.add_argument('--sam_refine', type=int, default=0, help='Tier1: SAM 边界精修 1/0 / SAM boundary refine')
     ap.add_argument('--postproc', type=int, default=0, help='后处理：形态学+最大连通域 1/0 / morphology + largest CC')
+    ap.add_argument('--boundary_smooth', type=int, default=0, help='高斯平滑边界精修 1/0 / Gaussian boundary smooth')
     ap.add_argument('--ms_tta', type=int, default=0, help='多尺度 TTA：0.8x/1.0x/1.2x 平均 1/0 / multi-scale TTA')
     ap.add_argument('--diffusion_refine', type=int, default=0, help='扩散模型边界精修 1/0（需4090+diffusers）/ diffusion boundary refine')
     args = ap.parse_args()
