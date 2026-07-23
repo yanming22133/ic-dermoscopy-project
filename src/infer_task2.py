@@ -122,6 +122,11 @@ def infer(args):
             pres[attr_json] = {'prob': round(p_attr, 4), 'status': status}
         presence[iid] = pres
 
+    json.dump(presence, open(os.path.join(args.save_dir, 'presence_raw.json'), 'w'), indent=2)
+    if args.attr_rules:  # T1: 属性关系后处理 / attribute relationship correction
+        from .task2_attr_graph import apply_attr_rules
+        presence = apply_attr_rules(presence)
+
     json.dump(presence, open(os.path.join(args.save_dir, 'presence.json'), 'w'), indent=2)
     print(f'{len(ids)} imgs -> {args.save_dir} (masks + presence.json)', flush=True)
 
@@ -136,6 +141,7 @@ def main():
     ap.add_argument('--do_preprocess', type=int, default=1)
     ap.add_argument('--tta', type=int, default=0, help='Tier1: 翻转 TTA 1/0 / flip TTA')
     ap.add_argument('--ms_tta', type=int, default=0, help='多尺度 TTA：0.8x/1.0x/1.2x 平均 1/0 / multi-scale TTA')
+    ap.add_argument('--attr_rules', type=int, default=0, help='T1: 属性关系图后处理 / attribute graph rules')
     args = ap.parse_args()
     infer(args)
 

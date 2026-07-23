@@ -45,17 +45,42 @@ def focal_loss(logits, target, gamma=2.0, alpha=0.25):
     return (alpha * (1 - pt) ** gamma * bce).mean(dim=(0, 2, 3))  # [5]
 
 
-def multilabel_loss(logits, target, weights):
-    """logits/target: [B,5,H,W]。逐通道 Focal+Dice 加权和。
-    logits/target: [B,5,H,W]. Weighted sum of per-channel Focal+Dice."""
+def edge_loss_per_channel(logits, target):
+    """T3: 逐属性边缘损失（WA-NET edge-supervised loss 简化版）。
+    Per-attribute edge loss (simplified WA-NET edge-supervised loss).
+    对 present 的属性，用 Sobel 算子提取边缘后算 MSE。"""
+    import torch.nn.functional as F
+    prob = torch.sigmoid(logits)  # [B,5,H,W]
+    # Sobel kernel
+    sobel_x = torch.tensor([[-1,0,1],[-2,0,2],[-1,0,1]], dtype=logits.dtype, device=logits.device).view(1,1,3,3)
+    sobel_y = torch.tensor([[-1,-2,-1],[0,0,0],[1,2,1]], dtype=logits.dtype, device=logits.device).view(1,1,3,3)
+    loss = 0.0
+    n = 0
+    for c in range(logits.shape[1]):
+        if target[:,c].sum() > 0:  # 只在有 GT 的属性上算（避免稀疏类全背景）
+            pe = prob[:,c:c+1]; te = target[:,c:c+1].float()
+            pe_x = F.conv2d(F.pad(pe,(1,1,1,1),mode='reflect'), sobel_x)
+            pe_y = F.conv2d(F.pad(pe,(1,1,1,1),mode='reflect'), sobel_y)
+            te_x = F.conv2d(F.pad(te,(1,1,1,1),mode='reflect'), sobel_x)
+            te_y = F.conv2d(F.pad(te,(1,1,1,1),mode='reflect'), sobel_y)
+            loss += F.mse_loss(pe_x, te_x) + F.mse_loss(pe_y, te_y)
+            n += 1
+    return loss / max(n, 1)
+
+
+def multilabel_loss(logits, target, weights, edge_weight=0.0):
+    """logits/target: [B,5,H,W]。逐通道 Focal+Dice 加权和 + 可选边缘损失。
+    logits/target: [B,5,H,W]. Per-channel Focal+Dice + optional edge loss."""
     prob = torch.sigmoid(logits)
-    foc = focal_loss(logits, target)  # [5]  Tier1: Focal 替代 BCE / Focal replaces BCE
-    # 逐通道 Dice / per-channel Dice
+    foc = focal_loss(logits, target)  # [5]  Tier1: Focal 替代 BCE
     inter = (prob * target).sum(dim=(0, 2, 3))
     denom = prob.sum(dim=(0, 2, 3)) + target.sum(dim=(0, 2, 3)) + 1e-6
     dice = 1 - (2 * inter / denom)  # [5]
     w = weights.to(logits.device)
-    return (w * (foc + dice)).mean()
+    loss = (w * (foc + dice)).mean()
+    if edge_weight > 0:
+        loss = loss + edge_weight * edge_loss_per_channel(logits, target)
+    return loss
 
 
 @torch.no_grad()
@@ -113,6 +138,7 @@ def main():
     ap.add_argument('--accum_steps', type=int, default=1, help='梯度累积；实际batch×accum=等效batch / grad accum')
     ap.add_argument('--resume', action='store_true', help='从 last.pth 断点续训 / resume from last.pth')
     ap.add_argument('--cosine_lr', action='store_true', help='余弦退火学习率 / cosine annealing LR')
+    ap.add_argument('--edge_loss', type=float, default=0.0, help='T3: 逐属性边缘损失权重 (WA-NET) / per-attr edge loss weight')
     args = ap.parse_args()
 
     set_seed(SEED)
@@ -169,7 +195,7 @@ def main():
             with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
                 out = model(pixel_values=img).logits
                 out = F.interpolate(out, size=mask.shape[-2:], mode='bilinear', align_corners=False)
-                loss = multilabel_loss(out, mask, CHAN_WEIGHTS) / accum  # 梯度累积 / grad accum
+                loss = multilabel_loss(out, mask, CHAN_WEIGHTS, edge_weight=args.edge_loss) / accum  # 梯度累积 / grad accum
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
                 scaler.step(opt); scaler.update(); opt.zero_grad()
