@@ -12,6 +12,7 @@ only the mask decoder with LoRA adapters on the image encoder.
     # 训练 / training:  logits = model(pixel_values=img, gt_mask=mask).logits
     # 推理 / inference: logits = model(pixel_values=img, input_boxes=pred_boxes).logits
 """
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
