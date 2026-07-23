@@ -1,66 +1,68 @@
 # 改进清单（Improvement Roadmap）
-## 基线（MVP）成功后的升级项
+## SOTA 论文驱动的重构版（2026-07-23）
 
-> **本轮策略（2026-07-22）**：Tier 1 已加进代码并随训练启用；PEFT-SAM 已移入 Tier 1（代码就绪，待在 4090 上训练）；**Tier 2/3 只记录、不训练**（按用户决定）。
-> This round: Tier 1 is coded and enabled in training; PEFT-SAM moved to Tier 1 (code ready, pending 4090 training); Tier 2/3 are documented only, not trained (per user decision).
+> 基于 papers_sota/ 5 篇 2025-2026 顶会/顶刊论文：
+> WA-NET (Sci Reports 2025, Dice 0.9458)、LEDNet-SwinUMamba (Nature Sci Reports 2026, Dice 0.9753)、
+> SAM-Adapter (Diagnostics 2026, Dice 0.9427)、MambaLiteUNet (CVPR 2026, HD95 10.55)、
+> LSF-Mamba (Algorithms 2026, 0.049M 参数)
 >
-> Task1 baseline 已跑完：**val Dice 0.904 / IoU 0.840 / HD95 24.75**（test-local 0.901/0.836/24.90，泛化好）。
-> Task1 baseline done: val Dice 0.904 / IoU 0.840 / HD95 24.75.
-
-每项标注：**预期增益**、**成本**、**风险**、**状态**。改进单独跑 val，记 with/without，进报告消融表。
+> **PEFT-SAM epoch 5: val Dice 0.9362（训练中）**
 
 ---
 
-## Tier 1 — 已加进代码 / Coded
+## Tier 1 — 已在代码或训练中
 
-| # | 改进项 | 模块 | 预期增益 | 成本 | 状态 |
+| # | 改进项 | 来源 | 状态 |
+|---|---|---|---|
+| 1 | PEFT-SAM ViT-B（冻结 encoder，训 mask_decoder，GT bbox prompt） | SAM-Adapter 同类 PEFT 路线 | 🔄 4090 训练中，epoch 5 Dice 0.936 |
+| 2 | freq_loss（Haar DWT：LL→Dice，HH→MSE） | WA-NET EWT 思路，但未做跨频融合 | ✅ 已启用 |
+| 3 | Boundary Loss（水平集 signed distance） | — | ✅ 已启用 |
+| 4 | Tversky（β 偏 recall，少漏病灶） | — | ✅ 已启用 |
+| 5 | 余弦退火 LR + 早停 + 断点续训 | — | ✅ 已启用 |
+| 6 | TTA（翻转）+ 多尺度 TTA（0.8/1/1.2×） | — | ✅ 代码就绪 |
+| 7 | 后处理（形态学 + 最大连通域） | SAM-Adapter 形态学精修思路 | ✅ 代码就绪 |
+| 8 | Task2 Focal + 稀疏类平衡采样 | — | ✅ 代码就绪 |
+
+---
+
+## Tier 2 — 高收益、可立即实施（等 PEFT-SAM 跑完后加）
+
+| # | 改进项 | 论文依据 | 怎么做 | 预期 | 成本 |
 |---|---|---|---|---|---|
-| 1 | **Tversky 边界损失**（BCE+Dice+Tversky） | Task1 | HD95 降 | 低 | ✅ Task1 已训 |
-| 2 | **TTA**（翻转 + 多尺度 0.8/1/1.2×）| Task1/2 | IoU +0.5~1.5 | 低 | ✅ 代码就绪 |
-| 3 | **Task2 Focal + 稀疏类平衡采样** | Task2 | 稀疏类 recall +5~10% | 低 | ✅ 代码就绪 |
-| 4 | **更强增强**（RandomGamma+CLAHE） | Task1/2 | Dice +0.3~0.5 | 低 | ✅ Task1 已用 |
-| 5 | **预处理缓存**（DullRazor 跑一次，推理走缓存） | 全局 | 训练 3-5x，推理快 | 低 | ✅ 已用 |
-| 6 | **早停 + 断点续训 + 梯度累积**（last.pth 每轮存） | Task1/2 | 防崩丢进度 | 低 | ✅ 已用 |
-| 7 | **余弦退火 LR**（CosineAnnealingLR） | Task1/2 | Dice +0.3~0.5 | 低 | ✅ 代码就绪（--cosine_lr） |
-| 8 | **后处理**（形态学开闭 + 最大连通域） | Task1 | Dice +0.1~0.5，HD95 降 | 低 | ✅ 代码就绪（--postproc），**不重训** |
-| 9 | **Boundary Loss**（水平集距离图，Kervadec） | Task1 | HD95 显著降 | 中 | ✅ 代码就绪（--boundary_loss） |
-| 10 | **PEFT-SAM 当主力**（冻结 SAM encoder，训 mask_decoder+LoRA，box prompt 来自 GT mask） | Task1 | IoU +1~2，HD95 显著降 | 中 | ✅ 代码就绪，待在 4090 上训练（24GB 可跑 batch=8 @ 1024） |
-| 11 | **集成推理**（多 ckpt 概率平均） | Task1 | IoU +0.5~1.5 | 中 | ✅ 代码就绪（--ensemble） |
-| 12 | **SegFormer B1/B2/B3 选项** | Task1/2 | B3 vs B2 +0.3~0.8 | 中 | ✅ 代码就绪（--variant b1/b2/b3） |
-| 13 | **DINOv2 检索 + 病灶裁剪**（双特征对比） | Bonus | 相关性 +10% | 低 | ✅ 代码就绪（bonus_clip --encoder dinov2） |
-| 14 | **🆕 频域解耦损失**（Haar DWT：LL Dice + HH MSE，分频单独优化形状/边界） | Task1 | HD95 显著降（直接填 ViT 高频短板） | 中 | 低 | DDA 频域方法论逆向应用：把高频边界梯度独立注入 ViT |
-| 15 | **🆕 通道注意力**（SE/ECA，解码器每层加通道重标定，~百参数） | Task1/2 | IoU +0.2~0.5 | 极低 | 低 | 特征降维精炼，抑制噪声通道 |
-| 16 | **🆕 DWT 数据增强**（训练时随机 DWT 分解→调频带权重→逆变换，强制模型不依赖单一频带） | Task1/2 | Dice +0.3~0.5，泛化↑ | 低 | 低 | DDA I1 多尺度 DWT 思路反向 |
-| 17 | **🆕 ConvNeXt/Swin backbone**（现代 CNN，对 2700 张数据更友好，天然高频感知强于 ViT） | Task1/2 | HD95 ↓ + IoU ↑ | 中 | 低 | 有预训练权重 |
+| A1 | **边缘监督损失** | WA-NET composite loss（BCE+Dice+edge） | 在现有 loss 上加一条 Sobel 边缘 MSE：对 pred 和 GT 分别做 Sobel → MSE。几行代码 | HD95 ↓ 3-5 | 极低 |
+| A2 | **跨频小波融合（EWT 简化版）** | WA-NET EWT：DWT→通道注意力→跨频拼接 | 对 SAM 256² 解码特征做一次 Haar DWT，把 HH/LH/HL 用 1×1 Conv 融合后加回 LL，再接 1×1 Conv | Dice +0.3-0.5 | 中 |
+| A3 | **交叉门控注意力（CGA）** | MambaLiteUNet CVPR 2026 | 在 SAM decoder 的 skip 连接上加一个轻量门控——对浅层特征做 sigmoid gate，乘到深层特征上，只 100 参数 | HD95 ↓ 2-3 | 低 |
+| A4 | **形态学边界精修（推理侧）** | SAM-Adapter morphological refinement | 推理时对 mask 边界做高斯平滑→重新阈值化。不改训练。 | HD95 ↓ 3-5 | 极低 |
+| A5 | **SAM decoder 出口加 DWT 残差** | LSF-Mamba FRE（小波分解+门控残差注入） | 在 SAM mask_decoder 的输出 logits 前，对 decoder 256² 特征做一层 Haar DWT→1×1 Conv→sigmoid gate→乘回原特征 | 边界锐利↑ | 中 |
 
-## Tier 2 — 仅记录，本轮不训练 / Documented only, not trained
+---
 
-| # | 改进项 | 模块 | 预期增益 | 成本 | 风险 | 依据 |
-|---|---|---|---|---|---|---|
-| 18 | **Mamba 消融**（UltraLBM-UNet，需 mamba_ssm） | Task1 | 可能 +0.5 | 低 | 高（Win） | CVPR 2026 |
-| 19 | **多任务联合训练**（Task1+Task2 共享 encoder） | Task1/2 | 各 +0.5~1 | 中 | 中 | 表示共享互益 |
-| 20 | **多尺度特征金字塔**（SegFormer 四层特征再融合，保留低频细节） | Task1 | HD95↓ IoU↑ | 中 | 中 | FPN 类结构补偿 1/4 分辨率损失 |
-| 21 | **DermINO backbone** | Bonus/Task2 | +1~2 | 中 | 中 | 皮肤科 FM 2025 |
-| 22 | **RAG 措辞增强** | Task3/Bonus | 可读性↑ | 中 | 中 | MMed-RAG ICLR2025 |
-| 23 | **MedSAM ViT-H PEFT**（ViT-H 版 SAM，从 Tier 3 升级，4090 可跑） | Task1 | +0.5~1 | 中高 | 中 | PEFT-MedSAM 原配置，4090 24GB 刚好 |
-| 24 | **扩散模型推理精修**（冻结扩散 U-Net，交叉注意力边界引导，从 Tier 3 升级，4090 推理可行） | Task1 | 边界锐利↑ | 中 | 中 | DDA 论文潜空间牵引逆向用 |
+## Tier 3 — 架构级改进（重训一次，冲 0.96+）
 
-## Tier 3 — 理论方向，高成本 / Theoretical, high cost
+| # | 改进项 | 论文依据 | 怎么做 | 预期 | 成本 |
+|---|---|---|---|---|---|
+| B1 | **独立边界检测支路（BRM）** | WA-NET BRM：Sobel 边缘提取+注意力融合 | 从 SAM 中间特征拉一条支路，做 Sobel 边缘检测→和主路融合 | HD95 ↓ 5-10 | 中高 |
+| B2 | **LEDNet 式边缘引导** | LEDNet：Siamese 边缘检测→引导主分割 | 用一个微型 CNN（3 层 Conv）专门学病灶边缘，输出作为加权 mask | Dice +1-2，HD95 大幅降 | 高 |
+| B3 | **Mamba decoder 替换 SAM 的 Transformer decoder** | LEDNet-SwinUMamba / LSF-Mamba | SAM mask_decoder（2 层 Transformer）换成 2 层 VSS 状态空间块 | 参数量↓，边界↑ | 高（需 mamba_ssm, Linux OK） |
+| B4 | **Swin backbone 替换 ViT-B** | LEDNet-SwinUMamba MambaLiteUNet | 用 Swin-Tiny 作为第二编码器，和 SAM ViT-B 特征做交叉注意力融合 | Dice +1-2 | 高 |
 
-| # | 改进项 | 模块 | 预期增益 | 成本 | 风险 | 依据 |
-|---|---|---|---|---|---|---|
-| 25 | **扩散模型分割**（MLFFM-SegDiff，需 4090+ 大显存，训练慢） | Task1 | +1~2 | 极高 | 极高 | MLFFM-SegDiff 2026.06 |
-| 26 | **VAE 潜空间流形约束**（冻结 VAE 编码器 → latent 特征对齐，4090 或可尝试） | Task1 | 边界一致性↑ | 高 | 中（4090 可行） | DDIM 降维思路 |
-| 27 | **半监督**（测试集无标签图 Mean-Teacher/MIRA-U） | Task1/2 | 分布适应 +1~3 | 高 | 中 | MIRA-U 2025 |
-| 28 | **知识图增强属性检测**（CKTG 思路） | Task2 | AUC +1~3 | 高 | 高 | CKTG TNNLS 2025 AUC 88.6% |
+---
+
+## Tier 4 — 冲顶（0.97+），需大改架构
+
+| # | 改进项 | 论文依据 |
+|---|---|---|
+| C1 | **LEDNet + SAM 混合** | LEDNet-SwinUMamba 的 Siamese 结构移植到 SAM：SAM 做全局，LEDNet 做边缘，跨注意力融合 |
+| C2 | **Mamba + ViT 双编码器** | LEDNet-SwinUMamba 双 backbone 范式：Mamba→局部连续性，ViT→全局依赖 |
+| C3 | **全频带 DWT 融合管线** | 结合 WA-NET EWT + LSF-Mamba FRE + 你的 DDA I4 中频偏置——SOTA 三合一频域方案 |
 
 ---
 
 ## 执行纪律
 
-1. **Tier 1 已随训练启用**；Tier 2/3 本轮只记录不训练（按决定）。
-2. 每项改进单独跑 val，记 with/without，进报告消融表（评委看深度）。
-3. 改进不达预期就回滚；负面结果也写进报告（"tried X, no gain because Y"）= 加分项。
-4. 7/28 后冻结模型，不再上新项。
+1. **等 PEFT-SAM 跑完** → 拿最终 Dice/IoU/HD95 做基线
+2. **A1-A4 一起加**（4 个都是低成本、不改模型结构），重训一次验证收益
+3. **A5 + B1** 如果 HD95 还高于 15，重点攻
+4. Tier 3/4 只在 7/28 前富余时考虑
 
-> 一句话：本轮 Tier 1 全做（已启用），Tier 2/3 留作后续冲奖或 future work。
+> 对标：当前 PEFT-SAM 趋势 0.94+，加 Tier 2（A1-A4）→ 0.945-0.95（追 WA-NET），加 Tier 3（B1-B2）→ 0.95-0.96，Tier 4 → 接近 0.97（顶尖）。
