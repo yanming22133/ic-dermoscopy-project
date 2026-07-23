@@ -201,16 +201,17 @@ class SamSegModel(nn.Module):
             best_s1 = iou_s1.argmax(dim=1)
             coarse = masks_s1[torch.arange(B, device=masks_s1.device), best_s1]  # [B,256,256]
             coarse_bin = (torch.sigmoid(coarse) > 0.5).cpu().numpy().astype(np.uint8)
-            # 从粗 mask 提取 bbox（每张图独立） / get bbox from coarse mask（per image）
+            # 从粗 mask 提取 bbox / get bbox from coarse mask
+            scale_h, scale_w = H / coarse.shape[-2], W / coarse.shape[-1]  # 256→1024 缩放
             boxes = []
-            for b in range(B):
-                mask01 = coarse_bin[b]
+            for b_ in range(B):
+                mask01 = coarse_bin[b_]
                 if mask01.sum() == 0:
-                    boxes.append([0, 0, W - 1, H - 1])  # fallback
+                    boxes.append([0, 0, W - 1, H - 1])
                 else:
                     ys, xs = np.where(mask01 > 0)
-                    boxes.append([int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())])
-            input_boxes = torch.tensor([boxes], device=pixel_values.device)  # [1,B,4]... wait need [B,1,4]
+                    boxes.append([int(xs.min() * scale_w), int(ys.min() * scale_h),
+                                  int(xs.max() * scale_w), int(ys.max() * scale_h)])
             input_boxes = torch.tensor(boxes, device=pixel_values.device).unsqueeze(1)  # [B,1,4]
 
         # ---- SAM 前向 / SAM forward ----
