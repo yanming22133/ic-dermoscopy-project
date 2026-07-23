@@ -183,13 +183,34 @@ class SamSegModel(nn.Module):
 
         # ---- 确定 input_boxes / Determine input_boxes ----
         if input_boxes is None and gt_mask is not None:
-            # 训练模式：从 GT mask 提取 bbox / Training: extract bbox from GT mask
+            # 训练/评估模式：从 GT mask 提取 bbox
             input_boxes = get_bbox_from_mask(gt_mask).to(pixel_values.device)
         elif input_boxes is None:
-            # 无任何 prompt：用全图默认框 / No prompt at all: use full-image default box
+            # 推理模式：两轮——先用全图 prompt 粗定位→拿 bbox→第二轮精修
+            # Inference: two-stage — full-image prompt first → bbox → refine
             input_boxes = torch.tensor(
                 [[[0, 0, W - 1, H - 1]]], device=pixel_values.device
             ).repeat(B, 1, 1)
+            with torch.no_grad():
+                outputs_stage1 = self.sam(pixel_values=pixel_values,
+                                          input_boxes=input_boxes,
+                                          multimask_output=True)
+            masks_s1 = outputs_stage1.pred_masks.squeeze(1)  # [B,3,256,256]
+            iou_s1 = outputs_stage1.iou_scores.squeeze(1)    # [B,3]
+            best_s1 = iou_s1.argmax(dim=1)
+            coarse = masks_s1[torch.arange(B, device=masks_s1.device), best_s1]  # [B,256,256]
+            coarse_bin = (torch.sigmoid(coarse) > 0.5).cpu().numpy().astype(np.uint8)
+            # 从粗 mask 提取 bbox（每张图独立） / get bbox from coarse mask（per image）
+            boxes = []
+            for b in range(B):
+                mask01 = coarse_bin[b]
+                if mask01.sum() == 0:
+                    boxes.append([0, 0, W - 1, H - 1])  # fallback
+                else:
+                    ys, xs = np.where(mask01 > 0)
+                    boxes.append([int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())])
+            input_boxes = torch.tensor([boxes], device=pixel_values.device)  # [1,B,4]... wait need [B,1,4]
+            input_boxes = torch.tensor(boxes, device=pixel_values.device).unsqueeze(1)  # [B,1,4]
 
         # ---- SAM 前向 / SAM forward ----
         outputs = self.sam(
