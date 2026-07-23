@@ -165,11 +165,13 @@ def main():
         no_improve = ck.get('no_improve', 0)
         print(f'resumed from epoch {start_ep}, best={best:.4f}', flush=True)
 
+    from tqdm import tqdm
     for ep in range(start_ep, args.epochs):
         model.train()
         opt.zero_grad()
         tot = 0.0
-        for i, (img, mask, _) in enumerate(tr_dl):
+        pbar = tqdm(tr_dl, desc=f'ep {ep+1}/{args.epochs}', leave=False)
+        for i, (img, mask, _) in enumerate(pbar):
             img = img.to(device)
             mask = mask.to(device)
             with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
@@ -199,6 +201,7 @@ def main():
                 scaler.update()
                 opt.zero_grad()
             tot += loss.item() * accum
+            pbar.set_postfix({'loss': f'{loss.item()*accum:.3f}'})
         d, i, _ = evaluate(model, va_dl, device, compute_hd=False, model_type=args.model)  # 训练中不算 HD95（快）
         print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', flush=True)
         if sched is not None:
