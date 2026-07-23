@@ -115,6 +115,8 @@ def main():
     ap.add_argument('--freq_loss', action='store_true', help='频域解耦损失（LL Dice + HH MSE）/ freq-decoupled loss')
     ap.add_argument('--ch_attn', action='store_true', help='通道注意力（SE）/ channel attention')
     ap.add_argument('--diffusion_loss', action='store_true', help='扩散潜空间流形对齐损失（需4090+diffusers）/ SD latent manifold alignment loss')
+    ap.add_argument('--edge_loss', type=float, default=0.0, help='WA-NET Sobel 边缘 MSE 权重 / edge-supervised loss weight (e.g. 0.3)')
+    ap.add_argument('--hd_score', action='store_true', help='每轮算 HD95 + 综合评分选最佳（Dice+IoU-HD95） / composite scoring')
     args = ap.parse_args()
 
     if args.model == 'peft_sam' and args.size != 1024:  # SAM 需 1024 输入 / SAM expects 1024
@@ -194,7 +196,10 @@ def main():
                 if args.freq_loss:  # 频域解耦：LL Dice + HH MSE / freq decoupled loss
                     from .freq_utils import freq_loss as fl
                     loss = loss + fl(prob, m) * 0.3 / accum
-                if diff_align is not None and ep >= 5 and i % 10 == 0:  # 每 10 batch 一次，避免 VAE+UNet 拖慢 / every 10 batches
+                if args.edge_loss > 0:  # WA-NET Sobel 边缘监督 / edge-supervised loss
+                    from .improvements.edge_branch import edge_supervised_loss
+                    loss = loss + args.edge_loss * edge_supervised_loss(prob, m) / accum
+                if diff_align is not None and ep >= 5 and i % 10 == 0:
                     loss = loss + diff_align(prob, m) * 0.1 / accum
             scaler.scale(loss).backward()
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
@@ -203,16 +208,22 @@ def main():
                 opt.zero_grad()
             tot += loss.item() * accum
             pbar.set_postfix({'loss': f'{loss.item()*accum:.3f}'})
-        d, i, _ = evaluate(model, va_dl, device, compute_hd=False, model_type=args.model)  # 训练中不算 HD95（快）
-        print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', flush=True)
+        d, i, h = evaluate(model, va_dl, device, compute_hd=args.hd_score, model_type=args.model)
+        print(f'ep {ep+1}/{args.epochs}  loss={tot/len(tr_dl):.4f}  val Dice={d:.4f} IoU={i:.4f}', end='', flush=True)
+        if args.hd_score:
+            print(f' HD95={h:.2f}', end='', flush=True)
+            score = d * 0.5 + i * 0.3 - h / 500  # 综合：Dice优先+IoU+HD95
+        else:
+            score = d
+        print(f'  score={score:.4f}', flush=True)
         if sched is not None:
-            sched.step()  # 余弦退火 / cosine annealing
-        if d > best:
-            best = d
+            sched.step()
+        if score > best:
+            best = score
             no_improve = 0
             torch.save({'model': model.state_dict(), 'model_type': args.model, 'variant': args.variant, 'size': args.size,
-                        'dice': d, 'iou': i, 'epoch': ep + 1}, best_path)
-            json.dump({'dice': d, 'iou': i, 'epoch': ep + 1},
+                        'dice': d, 'iou': i, 'hd95': h if args.hd_score else None, 'score': score, 'epoch': ep + 1}, best_path)
+            json.dump({'dice': d, 'iou': i, 'hd95': h if args.hd_score else None, 'score': score, 'epoch': ep + 1},
                       open(os.path.join(args.out, 'best_metrics.json'), 'w'), indent=2)
         else:
             no_improve += 1
@@ -222,7 +233,7 @@ def main():
         if args.patience > 0 and no_improve >= args.patience:
             print(f'early stopping at ep {ep+1} (no improve {no_improve} epochs)', flush=True)
             break
-    print(f'best val Dice={best:.4f} -> {best_path}', flush=True)
+    print(f'best score={best:.4f} -> {best_path}', flush=True)
 
     # 最终对最佳 checkpoint 在 val + test-local 上算 HD95（训练中省略了）/ final HD95 eval
     print('--- final eval (with HD95) on best checkpoint ---', flush=True)
