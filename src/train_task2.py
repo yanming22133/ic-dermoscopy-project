@@ -187,10 +187,12 @@ def main():
         no_improve = ck.get('no_improve', 0)
         print(f'resumed from epoch {start_ep}, best={best:.4f}', flush=True)
 
+    from tqdm import tqdm
     for ep in range(start_ep, args.epochs):
         model.train(); tot = 0.0
         opt.zero_grad()
-        for i, (img, mask, _) in enumerate(tr_dl):
+        pbar = tqdm(tr_dl, desc=f'ep {ep+1}/{args.epochs}', leave=False)
+        for i, (img, mask, _) in enumerate(pbar):
             img = img.to(device); mask = mask.to(device)
             with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
                 out = model(pixel_values=img).logits
@@ -200,6 +202,7 @@ def main():
             if (i + 1) % accum == 0 or (i + 1) == len(tr_dl):
                 scaler.step(opt); scaler.update(); opt.zero_grad()
             tot += loss.item() * accum
+            pbar.set_postfix({'loss': f'{loss.item()*accum:.3f}'})
         d, i, a = evaluate(model, va_dl, device)
         mean_dice = float(np.nanmean(d))
         print(f'ep {ep+1}/{args.epochs} loss={tot/len(tr_dl):.4f} meanDice={mean_dice:.4f}', flush=True)
