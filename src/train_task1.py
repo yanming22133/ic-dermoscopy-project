@@ -75,10 +75,11 @@ def evaluate(model, loader, device, compute_hd=True, model_type='segformer'):
         img = img.to(device)
         mask_gpu = mask.to(device)
         # peft_sam 需要 gt_mask 做 box prompt / peft_sam needs gt_mask as box prompt
-        if model_type == 'peft_sam':
-            out = model(pixel_values=img, gt_mask=mask_gpu).logits
-        else:
-            out = model(pixel_values=img).logits
+        with torch.amp.autocast('cuda', enabled=(img.device.type == 'cuda')):
+            if model_type == 'peft_sam':
+                out = model(pixel_values=img, gt_mask=mask_gpu).logits
+            else:
+                out = model(pixel_values=img).logits
         out = F.interpolate(out, size=mask_gpu.shape[-2:], mode='bilinear', align_corners=False)
         prob = F.softmax(out, dim=1)[:, 1]
         pred = (prob >= 0.5).cpu().numpy().astype(np.uint8)
